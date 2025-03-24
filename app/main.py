@@ -69,8 +69,8 @@ async def startup_event():
 
 
 if __name__ == "__main__":
-    # 通过环境变量获取端口，默认为8000
-    port = int(os.getenv("PORT", "8000"))
+    # 通过环境变量获取端口，gc run要求8080
+    port = int(os.getenv("PORT", "8080"))
     
     # 启动服务
     uvicorn.run("app.main:app", host="0.0.0.0", port=port, reload=True) 
