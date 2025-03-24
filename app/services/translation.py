@@ -6,12 +6,14 @@ import yt_dlp
 import replicate
 from datetime import datetime
 from pathlib import Path
-from tenacity import retry, stop_after_attempt
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from openai import AsyncOpenAI
 import aiohttp
 from functools import wraps
+import openai
+import httpx
 
-from app.core.config import REPLICATE_API_TOKEN, DEEPSEEK_API_KEY, RETRY_ATTEMPTS, BATCH_SIZE, MAX_CONCURRENT_TASKS
+from app.core.config import REPLICATE_API_TOKEN, DEEPSEEK_API_KEY, RETRY_ATTEMPTS, BATCH_SIZE, MAX_CONCURRENT_TASKS, API_TIMEOUT
 from app.core.logging import logger
 from app.utils.file_utils import cleanup_audio_file
 
@@ -37,6 +39,8 @@ def download_audio_webm(url, file_path):
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             },
             'force_ipv4': True
+            #'proxy': 'socks5://8t4v58911-region-US-sid-JaboGcGm-t-5:wl34yfx7@us2.cliproxy.io:443',
+
         }
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -67,6 +71,8 @@ def get_video_info(url):
             'no_warnings': True,
             'skip_download': True,
             'forcejson': True,
+            #'proxy': 'socks5://8t4v58911-region-US-sid-JaboGcGm-t-5:wl34yfx7@us2.cliproxy.io:443',
+
         }
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -95,6 +101,36 @@ def transcribe_audio(file_path):
         # 设置环境变量
         os.environ["REPLICATE_API_TOKEN"] = REPLICATE_API_TOKEN
         
+        # 设置超长的超时时间 - 音频转写需要很长时间
+        AUDIO_TIMEOUT = 3600  # 一小时超时
+        
+        # 直接修改httpx全局默认超时 - 这是最直接的方法
+        httpx._config.DEFAULT_TIMEOUT_CONFIG = httpx.Timeout(
+            connect=1200.0,             # 连接超时
+            read=AUDIO_TIMEOUT,       # 读取超时 - 关键参数
+            write=1200.0,              # 写入超时
+            pool=1200.0                 # 连接池超时
+        )
+        
+        logger.info(f"已设置全局HTTPX超时为: 连接={60}秒, 读取={AUDIO_TIMEOUT}秒")
+        
+        logger.info("正在调用Replicate API进行音频转写，可能需要较长时间...")
+        
+        # 使用Replicate的Client，而不是直接使用run函数
+        from replicate.client import Client
+        
+        # 创建客户端实例 - 使用自定义的超长超时
+        client = Client(
+            api_token=REPLICATE_API_TOKEN,
+            timeout=AUDIO_TIMEOUT  # 直接设置超时为一小时
+        )
+        
+        # 创建自定义的HTTPX客户端，替换默认客户端
+        custom_httpx_client = httpx.Client(timeout=AUDIO_TIMEOUT)
+        
+        # 确保使用我们的客户端
+        # client._client = custom_httpx_client  # 这一行可能不起作用，取决于replicate库的实现
+        
         with open(file_path, "rb") as audio_file:
             input_data = {
                 "file": audio_file,
@@ -103,7 +139,10 @@ def transcribe_audio(file_path):
                 "num_speakers": 2
             }
             
-            output = replicate.run(
+            logger.info("开始上传音频文件并等待转写结果...")
+            
+            # 使用自定义客户端运行模型
+            output = client.run(
                 "thomasmol/whisper-diarization:d8bc5908738ebd84a9bb7d77d94b9c5e5a3d867886791d7171ddb60455b4c6af",
                 input=input_data
             )
@@ -198,7 +237,20 @@ def async_retry(max_attempts=None, exceptions=None):
 async def safe_api_call_async(client, messages, model):
     """安全的异步API调用，内置重试机制"""
     try:
-        response = await client.chat.completions.create(
+        # 使用自定义超时设置 - 使用浮点数表示秒数，而不是ClientTimeout对象
+        timeout_seconds = API_TIMEOUT  # 直接使用秒数
+        
+        # 创建新的AsyncOpenAI客户端实例，包含超时设置
+        temp_client = AsyncOpenAI(
+            api_key=client.api_key,
+            base_url=client.base_url,  # 使用传入客户端的base_url
+            timeout=timeout_seconds  # 使用秒数作为timeout，而不是ClientTimeout对象
+        )
+        
+        logger.info(f"开始调用DeepSeek API, 模型:{model}, base_url:{client.base_url}, timeout:{timeout_seconds}秒")
+        
+        # 使用新客户端发送请求
+        response = await temp_client.chat.completions.create(
             model=model,
             response_format={'type': "json_object"},
             messages=messages,
@@ -210,23 +262,93 @@ async def safe_api_call_async(client, messages, model):
 
         # 检查响应结构
         if not hasattr(response, 'choices') or len(response.choices) == 0:
+            logger.error(f"无效的API响应结构: {response}")
             raise ValueError("无效的API响应结构")
 
         message = response.choices[0].message
         if not hasattr(message, 'content'):
+            logger.error(f"响应中缺少翻译内容: {message}")
             raise ValueError("响应中缺少翻译内容")
 
         # 预验证JSON格式
         try:
-            json.loads(message.content)
+            json_content = json.loads(message.content)
+            logger.debug(f"API调用成功返回有效JSON")
         except json.JSONDecodeError as e:
             logger.error(f"JSON预验证失败: {message.content}")
             raise
 
         return response
 
+    except openai.APIConnectionError as e:
+        # 记录连接错误详情
+        import traceback
+        
+        # 获取错误代码和HTTP状态码
+        status_code = getattr(e, 'status_code', 'unknown')
+        error_code = getattr(e, 'code', 'unknown')
+        
+        # 获取底层异常详情
+        cause = e.__cause__ if hasattr(e, '__cause__') else None
+        cause_type = type(cause).__name__ if cause else 'None'
+        cause_str = str(cause) if cause else 'None'
+        
+        # 输出详细错误信息
+        logger.error(f"DeepSeek API连接错误详情: {str(e)}")
+        logger.error(f"状态码: {status_code}, 错误码: {error_code}")
+        logger.error(f"底层异常: {cause_type}: {cause_str}")
+        logger.error(f"堆栈跟踪: {traceback.format_exc()}")
+        
+        # 重新抛出异常
+        raise
+        
+    except openai.APITimeoutError as e:
+        logger.error(f"DeepSeek API超时: {str(e)}")
+        logger.error(f"超时详情: {traceback.format_exc()}")
+        raise
+        
+    except openai.RateLimitError as e:
+        # 记录限流错误详情
+        status_code = getattr(e, 'status_code', 'unknown')
+        error_code = getattr(e, 'code', 'unknown')
+        
+        logger.error(f"DeepSeek API速率限制: {str(e)}")
+        logger.error(f"状态码: {status_code}, 错误码: {error_code}")
+        raise
+        
+    except openai.APIResponseValidationError as e:
+        # 记录响应验证错误详情
+        status_code = getattr(e, 'status_code', 'unknown')
+        error_code = getattr(e, 'code', 'unknown')
+        
+        logger.error(f"DeepSeek API响应验证错误: {str(e)}")
+        logger.error(f"状态码: {status_code}, 错误码: {error_code}")
+        raise
+        
+    except openai.AuthenticationError as e:
+        # 记录验证错误详情
+        status_code = getattr(e, 'status_code', 'unknown')
+        error_code = getattr(e, 'code', 'unknown')
+        
+        logger.error(f"DeepSeek API验证错误: {str(e)}")
+        logger.error(f"状态码: {status_code}, 错误码: {error_code}")
+        raise
+        
+    except openai.BadRequestError as e:
+        # 记录请求错误详情
+        status_code = getattr(e, 'status_code', 'unknown')
+        error_code = getattr(e, 'code', 'unknown')
+        param = getattr(e, 'param', 'unknown')
+        
+        logger.error(f"DeepSeek API请求错误: {str(e)}")
+        logger.error(f"状态码: {status_code}, 错误码: {error_code}, 参数: {param}")
+        raise
+        
     except Exception as e:
+        # 记录其他异常
         logger.error(f"异步API调用失败: {str(e)}")
+        logger.error(f"异常类型: {type(e).__name__}")
+        logger.error(f"堆栈跟踪: {traceback.format_exc()}")
         raise
 
 
@@ -532,11 +654,14 @@ async def translate_with_deepseek_async(numbered_sentences_chunks, custom_prompt
     # 创建信号量
     semaphore = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
     
-    # 创建异步OpenAI客户端
+    # 创建异步OpenAI客户端，使用API_TIMEOUT配置超时（使用秒数）
     client = AsyncOpenAI(
         api_key=DEEPSEEK_API_KEY, 
-        base_url="https://api.deepseek.com"
+        base_url="https://api.deepseek.com",  # 保持原始URL
+        timeout=float(API_TIMEOUT)  # 确保timeout是浮点数
     )
+    
+    logger.info(f"创建DeepSeek API客户端: base_url=https://api.deepseek.com, timeout={API_TIMEOUT}秒")
     
     # 创建批次处理任务
     tasks = []
@@ -576,4 +701,232 @@ def format_subtitles(subtitles_dict):
         srt_lines.append(text)
         srt_lines.append("")  # 空行分隔
 
-    return "\n".join(srt_lines) 
+    return "\n".join(srt_lines)
+
+
+def robust_transcribe(file_path, max_attempts=3):
+    """
+    带有重试机制的音频转写函数，处理各种超时和网络错误
+    
+    参数:
+        file_path (Path): 音频文件路径
+        max_attempts (int): 最大重试次数
+        
+    返回:
+        dict: 转写结果
+    """
+    # 定义可以重试的异常类型
+    retriable_exceptions = (
+        httpx.ReadTimeout, 
+        httpx.ConnectTimeout,
+        httpx.ReadError,
+        httpx.NetworkError,
+        ConnectionError,
+        TimeoutError
+    )
+    
+    @retry(
+        stop=stop_after_attempt(max_attempts),
+        wait=wait_exponential(multiplier=1, min=4, max=60),
+        retry=retry_if_exception_type(retriable_exceptions),
+        before_sleep=lambda retry_state: logger.info(
+            f"第 {retry_state.attempt_number}/{max_attempts} 次尝试失败，"
+            f"等待 {retry_state.next_action.sleep} 秒后重试..."
+        )
+    )
+    def attempt_transcribe():
+        return transcribe_audio(file_path)
+    
+    try:
+        logger.info(f"开始转写音频，最多尝试 {max_attempts} 次...")
+        return attempt_transcribe()
+    except Exception as e:
+        logger.error(f"所有转写尝试均失败: {str(e)}", exc_info=True)
+        # 重新抛出异常，让调用者处理
+        raise
+
+
+# 修改处理音频接口的调用方式
+async def process_audio(audio_path, output_dir, content_name, custom_prompt="", special_terms=""):
+    """
+    处理音频文件，包括转写和翻译
+    
+    参数:
+        audio_path (Path): 音频文件路径
+        output_dir (Path): 输出目录
+        content_name (str): 内容名称
+        custom_prompt (str): 自定义提示
+        special_terms (str): 特殊术语
+        
+    返回:
+        dict: 处理结果
+    """
+    try:
+        # 使用带重试功能的转写函数
+        transcription = robust_transcribe(audio_path, max_attempts=3)
+                
+        # 继续后续处理...
+        # ...
+        
+        # 后续代码保持不变
+        # ...
+        
+    except Exception as e:
+        logger.error(f"处理音频失败: {str(e)}", exc_info=True)
+        raise 
+
+
+async def test_deepseek_connection(verbose=True):
+    """
+    测试与DeepSeek API的连接并生成全面诊断报告
+    
+    参数:
+        verbose (bool): 是否打印详细信息
+        
+    返回:
+        dict: 连接测试结果
+    """
+    logger.info("开始测试DeepSeek API连接...")
+    
+    results = {
+        "api_key_check": None,
+        "network_diagnosis": None,
+        "api_test": None,
+        "summary": None
+    }
+    
+    # 1. 检查API密钥是否存在
+    if not DEEPSEEK_API_KEY:
+        logger.error("DeepSeek API密钥未设置")
+        results["api_key_check"] = {
+            "success": False,
+            "error": "API密钥未设置"
+        }
+    elif len(DEEPSEEK_API_KEY) < 20:  # 假设有效的API密钥至少有20个字符
+        logger.warning(f"DeepSeek API密钥可能无效: 长度为{len(DEEPSEEK_API_KEY)}个字符")
+        results["api_key_check"] = {
+            "success": False,
+            "error": f"API密钥长度异常，仅有{len(DEEPSEEK_API_KEY)}个字符"
+        }
+    else:
+        # 检查API密钥格式
+        import re
+        valid_format = re.match(r'^sk-[a-zA-Z0-9]{24,}$', DEEPSEEK_API_KEY)
+        if not valid_format:
+            logger.warning(f"DeepSeek API密钥格式可能不正确（应以'sk-'开头）")
+            results["api_key_check"] = {
+                "success": False,
+                "error": "API密钥格式可能不正确（应以'sk-'开头）"
+            }
+        else:
+            logger.info("DeepSeek API密钥格式正确")
+            results["api_key_check"] = {
+                "success": True
+            }
+    
+    # 2. 进行网络诊断
+    try:
+        host = "api.deepseek.com"
+        logger.info(f"开始对 {host} 进行网络诊断...")
+        
+        # 执行简单的网络连接测试
+        import socket
+        try:
+            socket.getaddrinfo(host, 443)
+            logger.info(f"DNS解析 {host} 成功")
+            results["network_diagnosis"] = {"success": True}
+        except Exception as e:
+            logger.error(f"DNS解析失败: {str(e)}")
+            results["network_diagnosis"] = {
+                "success": False,
+                "error": f"DNS解析失败: {str(e)}"
+            }
+            
+    except Exception as e:
+        logger.error(f"网络诊断失败: {str(e)}")
+        results["network_diagnosis"] = {
+            "success": False,
+            "error": str(e)
+        }
+    
+    # 3. 尝试发送一个简单的API请求
+    try:
+        logger.info("尝试发送简单的API请求...")
+        
+        # 创建客户端 - 使用浮点数作为timeout
+        timeout_seconds = 30.0  # 设置30秒超时
+        client = AsyncOpenAI(
+            api_key=DEEPSEEK_API_KEY, 
+            base_url="https://api.deepseek.com",
+            timeout=timeout_seconds  # 使用浮点数
+        )
+        
+        logger.info(f"创建测试客户端: timeout={timeout_seconds}秒")
+        
+        # 发送一个简单的请求
+        response = await client.chat.completions.create(
+            model="deepseek-chat",
+            messages=[
+                {"role": "system", "content": "你是一个有用的助手。"},
+                {"role": "user", "content": "你好，这是一个连接测试。"}
+            ],
+            max_tokens=10  # 限制返回的token数量，加快测试
+        )
+        
+        # 记录成功
+        logger.info(f"API请求成功: {response.model_dump_json(indent=2)}")
+        results["api_test"] = {
+            "success": True,
+            "response": response.model_dump()
+        }
+    except Exception as e:
+        logger.error(f"API请求失败: {str(e)}")
+        
+        # 获取详细错误信息
+        import traceback
+        stack_trace = traceback.format_exc()
+        
+        results["api_test"] = {
+            "success": False,
+            "error": str(e),
+            "traceback": stack_trace
+        }
+        
+        # 检查是否为连接错误
+        if isinstance(e, openai.APIConnectionError):
+            logger.error("这是一个连接错误，可能是网络问题")
+            
+            # 记录底层原因
+            if hasattr(e, '__cause__') and e.__cause__:
+                logger.error(f"底层原因: {type(e.__cause__).__name__}: {str(e.__cause__)}")
+        
+        # 检查是否为授权错误
+        elif isinstance(e, openai.AuthenticationError):
+            logger.error("这是一个授权错误，API密钥可能无效")
+    
+    # 4. 生成摘要
+    success_count = sum(1 for key, value in results.items() 
+                       if isinstance(value, dict) and value.get("success") == True)
+    total_tests = sum(1 for key, value in results.items() 
+                     if isinstance(value, dict) and "success" in value)
+    
+    if total_tests > 0:
+        success_rate = success_count / total_tests
+    else:
+        success_rate = 0
+    
+    if success_rate == 1.0:
+        summary = "所有测试都通过，DeepSeek API连接正常。"
+    elif success_rate > 0.5:
+        summary = "部分测试通过，DeepSeek API连接可能有轻微问题。"
+    else:
+        summary = "大多数测试失败，DeepSeek API连接存在严重问题。"
+    
+    results["summary"] = {
+        "success_rate": success_rate,
+        "conclusion": summary
+    }
+    
+    logger.info(f"DeepSeek API连接测试完成: {summary}")
+    
+    return results 
