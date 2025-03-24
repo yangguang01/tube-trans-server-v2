@@ -16,8 +16,7 @@ RUN pip install --upgrade pip && \
 
 # 复制应用代码
 COPY app/ ./app/
-COPY static/ ./static/
-COPY .env.example ./.env
+
 
 # 创建必要的目录
 RUN mkdir -p logs data/tasks tmp/audio static/subtitles static/transcripts
