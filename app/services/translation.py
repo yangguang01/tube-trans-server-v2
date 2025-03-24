@@ -96,98 +96,26 @@ def get_video_info(url):
         raise
 
 
-# def transcribe_audio(file_path):
-#     """
-#     使用 Replicate 的 Whisper 模型将音频文件转换为文本
+async def transcribe_audio(file_path):
+    """
+    使用 Replicate 的 Whisper 模型将音频文件转换为文本（异步版本）
     
-#     参数:
-#         file_path (Path): 音频文件路径
+    参数:
+        file_path (Path): 音频文件路径
         
-#     返回:
-#         dict: 转写结果
-#     """
-#     try:
-#         logger.info(f"开始转写音频: {file_path}")
-        
-#         # 设置环境变量
-#         os.environ["REPLICATE_API_TOKEN"] = REPLICATE_API_TOKEN
-        
-#         # 设置超长的超时时间 - 音频转写需要很长时间
-#         AUDIO_TIMEOUT = 1200
-        
-#         # 直接修改httpx全局默认超时 - 这是最直接的方法
-#         httpx._config.DEFAULT_TIMEOUT_CONFIG = httpx.Timeout(
-#             connect=1200.0,             # 连接超时
-#             read=AUDIO_TIMEOUT,       # 读取超时 - 关键参数
-#             write=1200.0,              # 写入超时
-#             pool=1200.0                 # 连接池超时
-#         )
-        
-#         logger.info(f"已设置全局HTTPX超时为: 连接={60}秒, 读取={AUDIO_TIMEOUT}秒")
-        
-#         logger.info("正在调用Replicate API进行音频转写，可能需要较长时间...")
-        
-#         # 使用Replicate的Client，而不是直接使用run函数
-#         from replicate.client import Client
-        
-#         # 创建客户端实例 - 使用自定义的超长超时
-#         client = Client(
-#             api_token=REPLICATE_API_TOKEN,
-#             timeout=AUDIO_TIMEOUT  # 直接设置超时为一小时
-#         )
-        
-#         # 创建自定义的HTTPX客户端，替换默认客户端
-#         custom_httpx_client = httpx.Client(timeout=AUDIO_TIMEOUT)
-        
-#         # 确保使用我们的客户端
-#         client._client = custom_httpx_client  # 这一行可能不起作用，取决于replicate库的实现
-        
-#         with open(file_path, "rb") as audio_file:
-#             input_data = {
-#                 "file": audio_file,
-#                 "prompt": "",
-#                 "language": "en",
-#                 "num_speakers": 2
-#             }
-            
-#             logger.info("开始上传音频文件并等待转写结果...")
-            
-#             # 使用自定义客户端运行模型
-#             output = client.run(
-#                 "thomasmol/whisper-diarization:d8bc5908738ebd84a9bb7d77d94b9c5e5a3d867886791d7171ddb60455b4c6af",
-#                 input=input_data
-#             )
-            
-#         logger.info("音频转写完成")
-#         return output
-#     except Exception as e:
-#         logger.error(f"转写失败: {str(e)}", exc_info=True)
-#         raise
-
-def transcribe_audio(file_path):
+    返回:
+        dict: 转写结果
+    """
     try:
-        logger.info(f"开始转写音频: {file_path}")
+        logger.info(f"开始异步转写音频: {file_path}")
         
         # 设置环境变量
         os.environ["REPLICATE_API_TOKEN"] = REPLICATE_API_TOKEN
         
-        # 设置超时时间（秒）
-        AUDIO_TIMEOUT = 1800  # 30分钟
+        # 定义模型版本
+        model_version = "thomasmol/whisper-diarization:d8bc5908738ebd84a9bb7d77d94b9c5e5a3d867886791d7171ddb60455b4c6af"
         
-        # 使用Replicate库的推荐方式创建客户端
-        from replicate.client import Client
-        from replicate.http import HTTPClient
-        
-        # 正确创建HTTPClient并设置超时
-        http_client = HTTPClient(
-            api_token=REPLICATE_API_TOKEN,
-            timeout=AUDIO_TIMEOUT
-        )
-        
-        # 使用这个HTTP客户端创建Replicate客户端
-        client = Client(api_token=REPLICATE_API_TOKEN, http_client=http_client)
-        
-        logger.info(f"已设置Replicate客户端超时为: {AUDIO_TIMEOUT}秒")
+        logger.info("正在异步调用Replicate API进行音频转写，可能需要较长时间...")
         
         with open(file_path, "rb") as audio_file:
             input_data = {
@@ -197,18 +125,18 @@ def transcribe_audio(file_path):
                 "num_speakers": 2
             }
             
-            logger.info("开始上传音频文件并等待转写结果...")
+            logger.info("开始异步上传音频文件并等待转写结果...")
             
-            # 运行模型
-            output = client.run(
-                "thomasmol/whisper-diarization:d8bc5908738ebd84a9bb7d77d94b9c5e5a3d867886791d7171ddb60455b4c6af",
+            # 使用异步API运行模型
+            output = await replicate.async_run(
+                model_version,
                 input=input_data
             )
             
-        logger.info("音频转写完成")
+        logger.info("异步音频转写完成")
         return output
     except Exception as e:
-        logger.error(f"转写失败: {str(e)}", exc_info=True)
+        logger.error(f"异步转写失败: {str(e)}", exc_info=True)
         raise
 
 
@@ -766,9 +694,9 @@ def format_subtitles(subtitles_dict):
     return "\n".join(srt_lines)
 
 
-def robust_transcribe(file_path, max_attempts=3):
+async def robust_transcribe(file_path, max_attempts=3):
     """
-    带有重试机制的音频转写函数，处理各种超时和网络错误
+    带有重试机制的音频转写函数，处理各种超时和网络错误（异步版本）
     
     参数:
         file_path (Path): 音频文件路径
@@ -787,25 +715,29 @@ def robust_transcribe(file_path, max_attempts=3):
         TimeoutError
     )
     
-    @retry(
-        stop=stop_after_attempt(max_attempts),
-        wait=wait_exponential(multiplier=1, min=4, max=60),
-        retry=retry_if_exception_type(retriable_exceptions),
-        before_sleep=lambda retry_state: logger.info(
-            f"第 {retry_state.attempt_number}/{max_attempts} 次尝试失败，"
-            f"等待 {retry_state.next_action.sleep} 秒后重试..."
-        )
-    )
-    def attempt_transcribe():
-        return transcribe_audio(file_path)
+    # 重试装饰器（异步版本）
+    current_attempt = 0
+    last_exception = None
     
-    try:
-        logger.info(f"开始转写音频，最多尝试 {max_attempts} 次...")
-        return attempt_transcribe()
-    except Exception as e:
-        logger.error(f"所有转写尝试均失败: {str(e)}", exc_info=True)
-        # 重新抛出异常，让调用者处理
-        raise
+    while current_attempt < max_attempts:
+        try:
+            logger.info(f"开始转写尝试 {current_attempt+1}/{max_attempts}...")
+            return await transcribe_audio(file_path)
+        except retriable_exceptions as e:
+            current_attempt += 1
+            last_exception = e
+            wait_time = min(2 ** current_attempt, 60)  # 指数退避
+            logger.info(f"第 {current_attempt}/{max_attempts} 次尝试失败，等待 {wait_time} 秒后重试...")
+            await asyncio.sleep(wait_time)
+        except Exception as e:
+            # 非重试类型异常，直接抛出
+            logger.error(f"转写失败，遇到非重试类型异常: {str(e)}", exc_info=True)
+            raise
+    
+    # 如果所有尝试都失败
+    logger.error(f"所有转写尝试均失败: {str(last_exception)}", exc_info=True)
+    # 重新抛出异常，让调用者处理
+    raise last_exception or Exception("最大重试次数已用尽")
 
 
 # 修改处理音频接口的调用方式
@@ -825,7 +757,7 @@ async def process_audio(audio_path, output_dir, content_name, custom_prompt="", 
     """
     try:
         # 使用带重试功能的转写函数
-        transcription = robust_transcribe(audio_path, max_attempts=3)
+        transcription = await robust_transcribe(audio_path, max_attempts=3)
                 
         # 继续后续处理...
         # ...

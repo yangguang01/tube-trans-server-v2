@@ -62,7 +62,7 @@ async def process_translation_task(task_id, youtube_url, custom_prompt="", speci
         
         # 4. 转写音频
         tasks_store[task_id]["progress"] = 0.4
-        asr_result = transcribe_audio(audio_file)
+        asr_result = await transcribe_audio(audio_file)
         
         # 保存转写结果
         with open(paths["transcript"], "w", encoding="utf-8") as f:
