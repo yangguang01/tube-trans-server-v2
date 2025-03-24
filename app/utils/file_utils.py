@@ -17,7 +17,7 @@ def create_directories():
         logger.info(f"确保目录存在: {dir_path}")
 
 
-def get_file_paths(task_id, video_title=None):
+def get_file_paths(task_id, video_title=None, video_id=None):
     """生成与任务相关的文件路径"""
     # 确保文件名安全
     if video_title:
@@ -33,7 +33,7 @@ def get_file_paths(task_id, video_title=None):
         "audio": AUDIO_DIR / f"{task_id}.webm",
         "transcript": TRANSCRIPTS_DIR / f"{task_id}.json",
         "transcript_srt": TRANSCRIPTS_DIR / f"{task_id}.srt",
-        "subtitle": SUBTITLES_DIR / f"{safe_title}.srt"
+        "subtitle": SUBTITLES_DIR / f"{video_id}.srt"
     }
     
     # 确保任务目录存在

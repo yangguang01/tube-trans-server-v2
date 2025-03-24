@@ -4,7 +4,7 @@ import asyncio
 import re
 import yt_dlp
 import replicate
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from openai import AsyncOpenAI
@@ -12,6 +12,8 @@ import aiohttp
 from functools import wraps
 import openai
 import httpx
+import sys
+import traceback
 
 from app.core.config import REPLICATE_API_TOKEN, DEEPSEEK_API_KEY, RETRY_ATTEMPTS, BATCH_SIZE, MAX_CONCURRENT_TASKS, API_TIMEOUT
 from app.core.logging import logger
@@ -78,58 +80,114 @@ def get_video_info(url):
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
             
-        logger.info(f"获取视频信息成功: {info.get('title', 'Unknown')}")
-        return info
+        # 确保返回的信息中包含视频ID
+        video_data = {
+            'title': info.get('title', 'Unknown'),
+            'id': info.get('id', ''),  # 提取视频ID
+            'uploader': info.get('uploader', 'Unknown'),
+            'duration': info.get('duration', 0),
+            # 其他需要的信息...
+        }
+        
+        logger.info(f"获取视频信息成功: {video_data['title']}, ID: {video_data['id']}")
+        return video_data
     except Exception as e:
         logger.error(f"获取视频信息失败: {str(e)}", exc_info=True)
         raise
 
 
-def transcribe_audio(file_path):
-    """
-    使用 Replicate 的 Whisper 模型将音频文件转换为文本
+# def transcribe_audio(file_path):
+#     """
+#     使用 Replicate 的 Whisper 模型将音频文件转换为文本
     
-    参数:
-        file_path (Path): 音频文件路径
+#     参数:
+#         file_path (Path): 音频文件路径
         
-    返回:
-        dict: 转写结果
-    """
+#     返回:
+#         dict: 转写结果
+#     """
+#     try:
+#         logger.info(f"开始转写音频: {file_path}")
+        
+#         # 设置环境变量
+#         os.environ["REPLICATE_API_TOKEN"] = REPLICATE_API_TOKEN
+        
+#         # 设置超长的超时时间 - 音频转写需要很长时间
+#         AUDIO_TIMEOUT = 1200
+        
+#         # 直接修改httpx全局默认超时 - 这是最直接的方法
+#         httpx._config.DEFAULT_TIMEOUT_CONFIG = httpx.Timeout(
+#             connect=1200.0,             # 连接超时
+#             read=AUDIO_TIMEOUT,       # 读取超时 - 关键参数
+#             write=1200.0,              # 写入超时
+#             pool=1200.0                 # 连接池超时
+#         )
+        
+#         logger.info(f"已设置全局HTTPX超时为: 连接={60}秒, 读取={AUDIO_TIMEOUT}秒")
+        
+#         logger.info("正在调用Replicate API进行音频转写，可能需要较长时间...")
+        
+#         # 使用Replicate的Client，而不是直接使用run函数
+#         from replicate.client import Client
+        
+#         # 创建客户端实例 - 使用自定义的超长超时
+#         client = Client(
+#             api_token=REPLICATE_API_TOKEN,
+#             timeout=AUDIO_TIMEOUT  # 直接设置超时为一小时
+#         )
+        
+#         # 创建自定义的HTTPX客户端，替换默认客户端
+#         custom_httpx_client = httpx.Client(timeout=AUDIO_TIMEOUT)
+        
+#         # 确保使用我们的客户端
+#         client._client = custom_httpx_client  # 这一行可能不起作用，取决于replicate库的实现
+        
+#         with open(file_path, "rb") as audio_file:
+#             input_data = {
+#                 "file": audio_file,
+#                 "prompt": "",
+#                 "language": "en",
+#                 "num_speakers": 2
+#             }
+            
+#             logger.info("开始上传音频文件并等待转写结果...")
+            
+#             # 使用自定义客户端运行模型
+#             output = client.run(
+#                 "thomasmol/whisper-diarization:d8bc5908738ebd84a9bb7d77d94b9c5e5a3d867886791d7171ddb60455b4c6af",
+#                 input=input_data
+#             )
+            
+#         logger.info("音频转写完成")
+#         return output
+#     except Exception as e:
+#         logger.error(f"转写失败: {str(e)}", exc_info=True)
+#         raise
+
+def transcribe_audio(file_path):
     try:
         logger.info(f"开始转写音频: {file_path}")
         
         # 设置环境变量
         os.environ["REPLICATE_API_TOKEN"] = REPLICATE_API_TOKEN
         
-        # 设置超长的超时时间 - 音频转写需要很长时间
-        AUDIO_TIMEOUT = 3600  # 一小时超时
+        # 设置超时时间（秒）
+        AUDIO_TIMEOUT = 1800  # 30分钟
         
-        # 直接修改httpx全局默认超时 - 这是最直接的方法
-        httpx._config.DEFAULT_TIMEOUT_CONFIG = httpx.Timeout(
-            connect=1200.0,             # 连接超时
-            read=AUDIO_TIMEOUT,       # 读取超时 - 关键参数
-            write=1200.0,              # 写入超时
-            pool=1200.0                 # 连接池超时
-        )
-        
-        logger.info(f"已设置全局HTTPX超时为: 连接={60}秒, 读取={AUDIO_TIMEOUT}秒")
-        
-        logger.info("正在调用Replicate API进行音频转写，可能需要较长时间...")
-        
-        # 使用Replicate的Client，而不是直接使用run函数
+        # 使用Replicate库的推荐方式创建客户端
         from replicate.client import Client
+        from replicate.http import HTTPClient
         
-        # 创建客户端实例 - 使用自定义的超长超时
-        client = Client(
+        # 正确创建HTTPClient并设置超时
+        http_client = HTTPClient(
             api_token=REPLICATE_API_TOKEN,
-            timeout=AUDIO_TIMEOUT  # 直接设置超时为一小时
+            timeout=AUDIO_TIMEOUT
         )
         
-        # 创建自定义的HTTPX客户端，替换默认客户端
-        custom_httpx_client = httpx.Client(timeout=AUDIO_TIMEOUT)
+        # 使用这个HTTP客户端创建Replicate客户端
+        client = Client(api_token=REPLICATE_API_TOKEN, http_client=http_client)
         
-        # 确保使用我们的客户端
-        # client._client = custom_httpx_client  # 这一行可能不起作用，取决于replicate库的实现
+        logger.info(f"已设置Replicate客户端超时为: {AUDIO_TIMEOUT}秒")
         
         with open(file_path, "rb") as audio_file:
             input_data = {
@@ -141,7 +199,7 @@ def transcribe_audio(file_path):
             
             logger.info("开始上传音频文件并等待转写结果...")
             
-            # 使用自定义客户端运行模型
+            # 运行模型
             output = client.run(
                 "thomasmol/whisper-diarization:d8bc5908738ebd84a9bb7d77d94b9c5e5a3d867886791d7171ddb60455b4c6af",
                 input=input_data
@@ -237,17 +295,23 @@ def async_retry(max_attempts=None, exceptions=None):
 async def safe_api_call_async(client, messages, model):
     """安全的异步API调用，内置重试机制"""
     try:
-        # 使用自定义超时设置 - 使用浮点数表示秒数，而不是ClientTimeout对象
-        timeout_seconds = API_TIMEOUT  # 直接使用秒数
+        # 使用自定义超时设置
+        timeout_settings = aiohttp.ClientTimeout(
+            total=API_TIMEOUT,
+            connect=30.0,       # 增加连接超时
+            sock_connect=30.0,  # 增加套接字连接超时
+            sock_read=API_TIMEOUT  # 套接字读取超时 - 这是关键参数
+        )
         
         # 创建新的AsyncOpenAI客户端实例，包含超时设置
+        # 不要尝试修改原始客户端的内部会话
         temp_client = AsyncOpenAI(
             api_key=client.api_key,
             base_url=client.base_url,  # 使用传入客户端的base_url
-            timeout=timeout_seconds  # 使用秒数作为timeout，而不是ClientTimeout对象
+            #timeout=timeout_settings
         )
         
-        logger.info(f"开始调用DeepSeek API, 模型:{model}, base_url:{client.base_url}, timeout:{timeout_seconds}秒")
+        logger.info(f"开始调用DeepSeek API, 模型:{model}, base_url:{client.base_url}")
         
         # 使用新客户端发送请求
         response = await temp_client.chat.completions.create(
@@ -654,14 +718,12 @@ async def translate_with_deepseek_async(numbered_sentences_chunks, custom_prompt
     # 创建信号量
     semaphore = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
     
-    # 创建异步OpenAI客户端，使用API_TIMEOUT配置超时（使用秒数）
+    # 创建异步OpenAI客户端，使用API_TIMEOUT配置超时
     client = AsyncOpenAI(
         api_key=DEEPSEEK_API_KEY, 
         base_url="https://api.deepseek.com",  # 保持原始URL
-        timeout=float(API_TIMEOUT)  # 确保timeout是浮点数
+        timeout=API_TIMEOUT  # 直接使用API_TIMEOUT配置超时
     )
-    
-    logger.info(f"创建DeepSeek API客户端: base_url=https://api.deepseek.com, timeout={API_TIMEOUT}秒")
     
     # 创建批次处理任务
     tasks = []
@@ -776,157 +838,143 @@ async def process_audio(audio_path, output_dir, content_name, custom_prompt="", 
         raise 
 
 
-async def test_deepseek_connection(verbose=True):
-    """
-    测试与DeepSeek API的连接并生成全面诊断报告
-    
-    参数:
-        verbose (bool): 是否打印详细信息
-        
-    返回:
-        dict: 连接测试结果
-    """
-    logger.info("开始测试DeepSeek API连接...")
-    
-    results = {
-        "api_key_check": None,
-        "network_diagnosis": None,
-        "api_test": None,
-        "summary": None
-    }
-    
-    # 1. 检查API密钥是否存在
-    if not DEEPSEEK_API_KEY:
-        logger.error("DeepSeek API密钥未设置")
-        results["api_key_check"] = {
-            "success": False,
-            "error": "API密钥未设置"
-        }
-    elif len(DEEPSEEK_API_KEY) < 20:  # 假设有效的API密钥至少有20个字符
-        logger.warning(f"DeepSeek API密钥可能无效: 长度为{len(DEEPSEEK_API_KEY)}个字符")
-        results["api_key_check"] = {
-            "success": False,
-            "error": f"API密钥长度异常，仅有{len(DEEPSEEK_API_KEY)}个字符"
-        }
-    else:
-        # 检查API密钥格式
-        import re
-        valid_format = re.match(r'^sk-[a-zA-Z0-9]{24,}$', DEEPSEEK_API_KEY)
-        if not valid_format:
-            logger.warning(f"DeepSeek API密钥格式可能不正确（应以'sk-'开头）")
-            results["api_key_check"] = {
-                "success": False,
-                "error": "API密钥格式可能不正确（应以'sk-'开头）"
-            }
+async def split_long_chinese_sentence_v3(chinese_timeranges_dict, model='deepseek-chat'):
+    '''
+    v3版本，先把中文句子按照空格进行分割，然后再对超过40个字的长句子进行分割
+    '''
+    # 先按照空格分割
+    space_split_subtitles = {}
+    space_split_index = 1
+
+    for index, (time_range, text) in chinese_timeranges_dict.items():
+        start_time, end_time = time_range.split(' --> ')
+        # 使用正则表达式分割中文句子之间的空格
+        parts = re.split(r'(?<=[\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff])', text)
+        num_parts = len(parts)
+        total_length = sum(len(part) for part in parts)
+
+        if num_parts > 1:
+            start_time = parse_time(start_time)
+            end_time = parse_time(end_time)
+            word_per_duration = (end_time - start_time)/total_length
+            current_start_time = start_time
+
+            for i, part in enumerate(parts):
+                current_end_time = current_start_time + word_per_duration * len(part)
+                space_split_subtitles[space_split_index] = (f"{time_to_str(current_start_time)} --> {time_to_str(current_end_time)}", part)
+                current_start_time = current_end_time
+                space_split_index += 1
         else:
-            logger.info("DeepSeek API密钥格式正确")
-            results["api_key_check"] = {
-                "success": True
-            }
-    
-    # 2. 进行网络诊断
-    try:
-        host = "api.deepseek.com"
-        logger.info(f"开始对 {host} 进行网络诊断...")
+            space_split_subtitles[space_split_index] = (time_range, text)
+            space_split_index += 1
+
+    # 复制字典
+    split_subtitles_dict = space_split_subtitles.copy()
+
+    # 找出中文字幕中的长字幕
+    threshold = 40
+    long_subtitles = []
+    for key, (timeranges, subtitles) in space_split_subtitles.items():
+        if len(subtitles) > threshold:
+            long_subtitles.append((key, timeranges, subtitles))
+
+    # 对长字幕开始进行优化
+    # 循环控制
+    for key, timeranges, subtitles in long_subtitles:
+        # 在循环中提取时间范围
+        start_str, end_str = timeranges.split(' --> ')
+        start_time = parse_time(start_str)
+        end_time = parse_time(end_str)
+
+        # 在循环中调用api分割句子
+        # api调用，返回api_return_content
+        split_prompt_v2 = f'''
+        Split the long Chinese sentences below, delimited by triple backtick
+        - Only split long sentences, do not alter the content of the sentences
+        - According to your understanding of the sentence, divide the long sentence into several short sentences that are easiest to understand.
+        - When splitting, please keep the "linguistic integrity" together.
+        - Each short sentence should not exceed 20 Chinese characters as much as possible.
+
+        Provide your translation in json structure like this:{{
+              '1':'<Segmented short sentences 1>',
+              '2':'<Segmented short sentences 2>',
+              }}
+        long Chinese sentences below: ```{subtitles}```
+        '''
         
-        # 执行简单的网络连接测试
-        import socket
-        try:
-            socket.getaddrinfo(host, 443)
-            logger.info(f"DNS解析 {host} 成功")
-            results["network_diagnosis"] = {"success": True}
-        except Exception as e:
-            logger.error(f"DNS解析失败: {str(e)}")
-            results["network_diagnosis"] = {
-                "success": False,
-                "error": f"DNS解析失败: {str(e)}"
-            }
-            
-    except Exception as e:
-        logger.error(f"网络诊断失败: {str(e)}")
-        results["network_diagnosis"] = {
-            "success": False,
-            "error": str(e)
-        }
-    
-    # 3. 尝试发送一个简单的API请求
-    try:
-        logger.info("尝试发送简单的API请求...")
+        logger.info(f"对长句子进行分割: {subtitles}")
         
-        # 创建客户端 - 使用浮点数作为timeout
-        timeout_seconds = 30.0  # 设置30秒超时
         client = AsyncOpenAI(
             api_key=DEEPSEEK_API_KEY, 
             base_url="https://api.deepseek.com",
-            timeout=timeout_seconds  # 使用浮点数
+            timeout=float(API_TIMEOUT)
         )
         
-        logger.info(f"创建测试客户端: timeout={timeout_seconds}秒")
+        messages = [
+            {"role": "user", "content": split_prompt_v2},
+        ]
         
-        # 发送一个简单的请求
-        response = await client.chat.completions.create(
-            model="deepseek-chat",
-            messages=[
-                {"role": "system", "content": "你是一个有用的助手。"},
-                {"role": "user", "content": "你好，这是一个连接测试。"}
-            ],
-            max_tokens=10  # 限制返回的token数量，加快测试
-        )
-        
-        # 记录成功
-        logger.info(f"API请求成功: {response.model_dump_json(indent=2)}")
-        results["api_test"] = {
-            "success": True,
-            "response": response.model_dump()
-        }
-    except Exception as e:
-        logger.error(f"API请求失败: {str(e)}")
-        
-        # 获取详细错误信息
-        import traceback
-        stack_trace = traceback.format_exc()
-        
-        results["api_test"] = {
-            "success": False,
-            "error": str(e),
-            "traceback": stack_trace
-        }
-        
-        # 检查是否为连接错误
-        if isinstance(e, openai.APIConnectionError):
-            logger.error("这是一个连接错误，可能是网络问题")
+        # 调用API分割长句子
+        try:
+            response = await client.chat.completions.create(
+                model=model,
+                response_format={'type': "json_object"},
+                messages=messages,
+                temperature=0,
+                top_p=1,
+                frequency_penalty=0,
+                presence_penalty=0,
+            )
+            api_return_content = response.choices[0].message.content
             
-            # 记录底层原因
-            if hasattr(e, '__cause__') and e.__cause__:
-                logger.error(f"底层原因: {type(e.__cause__).__name__}: {str(e.__cause__)}")
-        
-        # 检查是否为授权错误
-        elif isinstance(e, openai.AuthenticationError):
-            logger.error("这是一个授权错误，API密钥可能无效")
+            # 处理api返回的json结果，转为字典
+            api_return_content_todict = json.loads(api_return_content)
+            all_text = ''.join(api_return_content_todict.values())
+            
+            # 在循环中完成短句的时间轴计算和匹配
+            # 新建一个列表用来存储分割后的字幕信息
+            split_subtitles = []
+            # 计算总时长
+            duration = (end_time - start_time).total_seconds()
+            # 用返回的句子来计算每个字符的持续时间
+            word_duration = duration / len(all_text)
+            # 起始时间
+            current_start_time = start_time
+            # 为分割后的每个字幕生成时间轴
+            short_subtitle_list = list(api_return_content_todict.values())
+            for short_subtitle in short_subtitle_list:
+                # 计算时间轴信息
+                short_subtitle_duration = len(short_subtitle) * word_duration
+                current_end_time = current_start_time + timedelta(seconds=short_subtitle_duration)
+                # 存储分割后字幕的时间轴
+                short_subtitle_time_range = f'{time_to_str(current_start_time)} --> {time_to_str(current_end_time)}'
+                split_subtitles.append((short_subtitle_time_range, short_subtitle))
+                # 更新初始时间
+                current_start_time = current_end_time
+            
+            # 在循环中更新split_subtitles_dict字典
+            split_subtitles_dict[key] = split_subtitles
+            
+        except Exception as e:
+            logger.error(f"长句分割失败: {str(e)}", exc_info=True)
+            # 如果分割失败，保留原始句子
+            split_subtitles_dict[key] = [(timeranges, subtitles)]
+
+    logger.info(f'使用的模型：{model}')
     
-    # 4. 生成摘要
-    success_count = sum(1 for key, value in results.items() 
-                       if isinstance(value, dict) and value.get("success") == True)
-    total_tests = sum(1 for key, value in results.items() 
-                     if isinstance(value, dict) and "success" in value)
+    # 处理最终的字典结构，使其符合预期的格式
+    final_dict = {}
+    current_index = 1
     
-    if total_tests > 0:
-        success_rate = success_count / total_tests
-    else:
-        success_rate = 0
+    for key, value in split_subtitles_dict.items():
+        if isinstance(value, list):  # 处理被分割的字幕
+            for time_range, text in value:
+                final_dict[current_index] = (time_range, text)
+                current_index += 1
+        else:  # 处理未被分割的字幕
+            time_range, text = value
+            final_dict[current_index] = (time_range, text)
+            current_index += 1
     
-    if success_rate == 1.0:
-        summary = "所有测试都通过，DeepSeek API连接正常。"
-    elif success_rate > 0.5:
-        summary = "部分测试通过，DeepSeek API连接可能有轻微问题。"
-    else:
-        summary = "大多数测试失败，DeepSeek API连接存在严重问题。"
-    
-    results["summary"] = {
-        "success_rate": success_rate,
-        "conclusion": summary
-    }
-    
-    logger.info(f"DeepSeek API连接测试完成: {summary}")
-    
-    return results 
+    logger.info(f"长句子拆分完成：原始{len(chinese_timeranges_dict)}个条目，拆分后{len(final_dict)}个条目")
+    return final_dict 

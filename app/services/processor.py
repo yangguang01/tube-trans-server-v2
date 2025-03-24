@@ -21,7 +21,8 @@ from app.services.translation import (
     subtitles_to_dict,
     map_marged_sentence_to_timeranges,
     map_chinese_to_time_ranges,
-    format_subtitles
+    format_subtitles,
+    split_long_chinese_sentence_v3
 )
 
 # 全局存储任务状态
@@ -49,10 +50,11 @@ async def process_translation_task(task_id, youtube_url, custom_prompt="", speci
         tasks_store[task_id]["progress"] = 0.1
         video_info = get_video_info(youtube_url)
         video_title = video_info.get('title', task_id)
+        video_id = video_info.get('id', task_id)
         tasks_store[task_id]["video_title"] = video_title
         
         # 2. 获取文件路径
-        paths = get_file_paths(task_id, video_title)
+        paths = get_file_paths(task_id, video_title, video_id)
         
         # 3. 下载音频
         tasks_store[task_id]["progress"] = 0.2
@@ -95,15 +97,19 @@ async def process_translation_task(task_id, youtube_url, custom_prompt="", speci
         tasks_store[task_id]["progress"] = 0.8
         chinese_timeranges_dict = map_chinese_to_time_ranges(llm_trans_result, marged_timeranges_dict)
         
-        # 10. 将字典转为SRT字符串
-        tasks_store[task_id]["progress"] = 0.9
-        cn_srt_content = format_subtitles(chinese_timeranges_dict)
+        # 10. 使用中文长句子分割为适合字幕显示的短句
+        logger.info("开始处理中文长句子拆分...")
+        short_chinese_subtitles_dict = await split_long_chinese_sentence_v3(chinese_timeranges_dict)
         
-        # 11. 保存中文字幕文件
+        # 11. 将字典转为SRT字符串
+        tasks_store[task_id]["progress"] = 0.9
+        cn_srt_content = format_subtitles(short_chinese_subtitles_dict)
+        
+        # 12. 保存中文字幕文件
         with open(paths["subtitle"], "w", encoding="utf-8") as f:
             f.write(cn_srt_content)
         
-        # 12. 更新任务状态和结果URL
+        # 13. 更新任务状态和结果URL
         result_url = get_file_url(paths["subtitle"])
         tasks_store[task_id].update({
             "status": "completed",
