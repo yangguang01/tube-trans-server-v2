@@ -40,9 +40,8 @@ def download_audio_webm(url, file_path):
             'http_headers': {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             },
-            'force_ipv4': True
-            #'proxy': 'socks5://8t4v58911-region-US-sid-JaboGcGm-t-5:wl34yfx7@us2.cliproxy.io:443',
-
+            'force_ipv4': True,
+            'proxy': 'socks5://8t4v58911-region-US-sid-JaboGcGm-t-5:wl34yfx7@us2.cliproxy.io:443'
         }
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -73,7 +72,8 @@ def get_video_info(url):
             'no_warnings': True,
             'skip_download': True,
             'forcejson': True,
-            #'proxy': 'socks5://8t4v58911-region-US-sid-JaboGcGm-t-5:wl34yfx7@us2.cliproxy.io:443',
+            'force_ipv4': True,
+            'proxy': 'socks5://8t4v58911-region-US-sid-JaboGcGm-t-5:wl34yfx7@us2.cliproxy.io:443',
 
         }
         
