@@ -23,10 +23,10 @@ RUN mkdir -p logs data/tasks tmp/audio static/subtitles static/transcripts
 
 # 设置环境变量
 ENV PYTHONPATH=/app
-ENV PORT=8000
+ENV PORT=8080
 
 # 暴露端口
-EXPOSE 8000
+EXPOSE 8080
 
 # 启动应用
-CMD ["python3", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"] 
+CMD ["python3", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"] 
