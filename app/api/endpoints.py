@@ -67,21 +67,23 @@ async def get_subtitle_file(task_id: str):
     if task_info["status"] != "completed":
         raise HTTPException(status_code=400, detail="Task not yet completed")
     
-    # 查找字幕文件
-    video_title = task_info.get("video_title", task_id)
-    # 清理文件名
-    import re
-    safe_title = re.sub(r'[^\w\s-]', '', video_title)
-    safe_title = re.sub(r'\s+', '-', safe_title)
-    
-    subtitle_file = SUBTITLES_DIR / f"{safe_title}.srt"
+    # # 查找字幕文件
+    # video_title = task_info.get("video_title", task_id)
+    # # 清理文件名
+    # import re
+    # safe_title = re.sub(r'[^\w\s-]', '', video_title)
+    # safe_title = re.sub(r'\s+', '-', safe_title)
+
+    # 使用视频id查找字幕文件
+    video_id = task_info.get("video_id", task_id)
+    subtitle_file = SUBTITLES_DIR / f"{video_id}.srt"
     
     if not subtitle_file.exists():
         raise HTTPException(status_code=404, detail="Subtitle file not found")
     
     return FileResponse(
         path=subtitle_file,
-        filename=f"{safe_title}.srt",
+        filename=f"{video_id}.srt",
         media_type="application/x-subrip"
     )
 
