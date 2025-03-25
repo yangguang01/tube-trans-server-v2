@@ -52,7 +52,7 @@ async def process_translation_task(task_id, youtube_url, custom_prompt="", speci
         video_title = video_info.get('title', task_id)
         video_id = video_info.get('id', task_id)
         tasks_store[task_id]["video_title"] = video_title
-        tasks_store[task_id]["video_title"] = video_id
+        tasks_store[task_id]["video_id"] = video_id
         
         # 2. 获取文件路径
         paths = get_file_paths(task_id, video_title, video_id)
