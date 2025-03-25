@@ -6,6 +6,9 @@ from app.models.schemas import TranslationRequest, TaskResponse, TaskStatus
 from app.services.processor import create_translation_task, get_task_status
 from app.core.config import SUBTITLES_DIR
 
+from app.core.logging import logger
+
+
 router = APIRouter()
 
 
@@ -77,6 +80,8 @@ async def get_subtitle_file(task_id: str):
     # 使用视频id查找字幕文件
     video_id = task_info.get("video_id", task_id)
     subtitle_file = SUBTITLES_DIR / f"{video_id}.srt"
+    logger.info(f"字幕文件路径: {subtitle_file}")
+    
     
     if not subtitle_file.exists():
         raise HTTPException(status_code=404, detail="Subtitle file not found")
