@@ -12,8 +12,6 @@ import aiohttp
 from functools import wraps
 import openai
 import httpx
-import sys
-import traceback
 
 from app.core.config import REPLICATE_API_TOKEN, DEEPSEEK_API_KEY, RETRY_ATTEMPTS, BATCH_SIZE, MAX_CONCURRENT_TASKS, API_TIMEOUT
 from app.core.logging import logger
@@ -74,7 +72,6 @@ def get_video_info(url):
             'forcejson': True,
             'force_ipv4': True,
             'proxy': 'socks5://8t4v58911-region-US-sid-JaboGcGm-t-5:wl34yfx7@us2.cliproxy.io:443',
-
         }
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -84,7 +81,7 @@ def get_video_info(url):
         video_data = {
             'title': info.get('title', 'Unknown'),
             'id': info.get('id', ''),  # 提取视频ID
-            'uploader': info.get('uploader', 'Unknown'),
+            'channel': info.get('channel', 'Unknown'),
             'duration': info.get('duration', 0),
             # 其他需要的信息...
         }
@@ -344,6 +341,19 @@ async def safe_api_call_async(client, messages, model):
         raise
 
 
+def generate_custom_prompt(video_title: str, channel_name: str) -> str:
+    """
+    根据视频标题和频道名生成自定义提示
+    
+    参数:
+        video_title (str): 视频标题
+        channel_name (str): 频道名称
+        
+    返回:
+        str: 格式化的提示字符串
+    """
+    return f"video title: {video_title}\nchannel name: {channel_name}"
+
 async def process_chunk(chunk, custom_prompt, model, client, semaphore):
     """处理单个翻译批次"""
     async with semaphore:
@@ -363,6 +373,7 @@ async def process_chunk(chunk, custom_prompt, model, client, semaphore):
 
         # Background information of the translation content
         {custom_prompt}
+        Please identify the professional domain of the video content based on the information provided above, and leverage domain-specific knowledge and terminology to deliver an accurate and contextually appropriate translation.
 
         ## Skills
         ### Skill 1: Line-by-Line Translation
@@ -445,7 +456,9 @@ async def process_chunk(chunk, custom_prompt, model, client, semaphore):
                 - Identify proper nouns and special terms enclosed in angle brackets < > within the subtitle text, and keep them in their original English form without translation.
                 - Consider the context of the video when translating to ensure accuracy and coherence.
 
-                Video description: {custom_prompt}
+                Background information of the translation content
+                {custom_prompt}
+                Please identify the professional domain of the video content based on the information provided above, and leverage domain-specific knowledge and terminology to deliver an accurate and contextually appropriate translation.
 
                 Please provide your revised Chinese translation in the following JSON format:
                 {{

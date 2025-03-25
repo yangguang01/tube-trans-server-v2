@@ -22,7 +22,8 @@ from app.services.translation import (
     map_marged_sentence_to_timeranges,
     map_chinese_to_time_ranges,
     format_subtitles,
-    split_long_chinese_sentence_v3
+    split_long_chinese_sentence_v3,
+    generate_custom_prompt
 )
 
 # 全局存储任务状态
@@ -51,6 +52,7 @@ async def process_translation_task(task_id, youtube_url, custom_prompt="", speci
         video_info = get_video_info(youtube_url)
         video_title = video_info.get('title', task_id)
         video_id = video_info.get('id', task_id)
+        video_channel = video_info.get('channel', task_id)
         tasks_store[task_id]["video_title"] = video_title
         tasks_store[task_id]["video_id"] = video_id
         
@@ -82,6 +84,7 @@ async def process_translation_task(task_id, youtube_url, custom_prompt="", speci
         
         # 7. 使用DeepSeek异步并行翻译英文字幕到中文
         tasks_store[task_id]["progress"] = 0.6
+        custom_prompt = generate_custom_prompt(video_title, video_channel)
         llm_trans_result = await translate_with_deepseek_async(
             numbered_sentences_chunks, 
             custom_prompt, 
