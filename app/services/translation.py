@@ -341,7 +341,7 @@ async def safe_api_call_async(client, messages, model):
         raise
 
 
-def generate_custom_prompt(video_title: str, channel_name: str) -> str:
+def generate_custom_prompt(video_title: str, channel_name: str, custom_prompt: str) -> str:
     """
     根据视频标题和频道名生成自定义提示
     
@@ -352,7 +352,11 @@ def generate_custom_prompt(video_title: str, channel_name: str) -> str:
     返回:
         str: 格式化的提示字符串
     """
-    return f"video title: {video_title}\nchannel name: {channel_name}"
+    if custom_prompt:
+        full_custom_prompt = f"{custom_prompt}\n\nvideo title: {video_title}\nchannel name: {channel_name}"
+    else:
+        full_custom_prompt = f"video title: {video_title}\nchannel name: {channel_name}"
+    return full_custom_prompt
 
 async def process_chunk(chunk, custom_prompt, model, client, semaphore):
     """处理单个翻译批次"""
@@ -366,6 +370,7 @@ async def process_chunk(chunk, custom_prompt, model, client, semaphore):
         first_item_number = chunk[0][0] if chunk else "N/A"
         end_item_number = first_item_number + check_chunk_string - 1
         
+        logger.info(f"个性化提示词: {custom_prompt}")
         # 构造系统提示
         trans_json_user_prompt_v3 = f'''
         # Role
@@ -419,7 +424,6 @@ async def process_chunk(chunk, custom_prompt, model, client, semaphore):
           }}
           ```
         '''
-
         try:
             # 初次API调用
             response = await safe_api_call_async(

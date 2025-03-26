@@ -84,13 +84,15 @@ async def process_translation_task(task_id, youtube_url, custom_prompt="", speci
         
         # 7. 使用DeepSeek异步并行翻译英文字幕到中文
         tasks_store[task_id]["progress"] = 0.6
-        custom_prompt = generate_custom_prompt(video_title, video_channel)
+        # 生成视频上下文信息
+        full_custom_prompt = generate_custom_prompt(video_title, video_channel, custom_prompt)
         llm_trans_result = await translate_with_deepseek_async(
             numbered_sentences_chunks, 
-            custom_prompt, 
+            full_custom_prompt, 
             special_terms, 
             content_name
         )
+        
         
         # 8. 生成原始字幕的字典数据，给长句子匹配时间轴信息
         tasks_store[task_id]["progress"] = 0.7
