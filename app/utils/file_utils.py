@@ -16,30 +16,31 @@ def create_directories():
         dir_path.mkdir(parents=True, exist_ok=True)
         logger.info(f"确保目录存在: {dir_path}")
 
-
-def get_file_paths(task_id, video_title=None, video_id=None):
-    """生成与任务相关的文件路径"""
-    # 确保文件名安全
-    if video_title:
-        # 移除特殊字符并用连字符替换空格
-        safe_title = re.sub(r'[^\w\s-]', '', video_title)
-        safe_title = re.sub(r'\s+', '-', safe_title)
-    else:
-        safe_title = task_id
+# 250403更新：删除get_file_paths函数，在create_translation_task函数初始化paths
+# def get_file_paths(task_id, video_title=None, video_id=None):
+#     """生成与任务相关的文件路径"""
+#     # 确保文件名安全
+#     if video_title:
+#         # 移除特殊字符并用连字符替换空格
+#         safe_title = re.sub(r'[^\w\s-]', '', video_title)
+#         safe_title = re.sub(r'\s+', '-', safe_title)
+#     else:
+#         safe_title = task_id
     
-    # 生成各类文件路径
-    paths = {
-        "task_dir": TMP_DIR / task_id,
-        "audio": AUDIO_DIR / f"{task_id}.webm",
-        "transcript": TRANSCRIPTS_DIR / f"{task_id}.json",
-        "transcript_srt": TRANSCRIPTS_DIR / f"{task_id}.srt",
-        "subtitle": SUBTITLES_DIR / f"{video_id}.srt"
-    }
+#     # 生成各类文件路径
+#     paths = {
+#         "task_dir": TMP_DIR / task_id,
+#         "audio": AUDIO_DIR / f"{task_id}.webm",
+#         "transcript": TRANSCRIPTS_DIR / f"{task_id}.json",
+#         "transcript_srt": TRANSCRIPTS_DIR / f"{task_id}.srt",
+#         "subtitle": SUBTITLES_DIR / f"{video_id}.srt",
+#         #"subtitle": SUBTITLES_DIR / f"{task_id}.srt"
+#     }
     
-    # 确保任务目录存在
-    paths["task_dir"].mkdir(exist_ok=True)
+#     # 确保任务目录存在
+#     paths["task_dir"].mkdir(exist_ok=True)
     
-    return paths
+#     return paths
 
 
 def cleanup_task_files(task_id):

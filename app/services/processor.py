@@ -6,31 +6,33 @@ from pathlib import Path
 
 from app.core.logging import logger
 from app.utils.file_utils import (
-    get_file_paths, 
+    #get_file_paths, 
     cleanup_task_files, 
     cleanup_audio_file, 
     get_file_url
 )
 from app.services.translation import (
     get_video_info,
-    download_audio_webm,
     transcribe_audio,
     json_to_srt,
-    merge_incomplete_sentences,
+    extract_asr_sentences,
     translate_with_deepseek_async,
     subtitles_to_dict,
     map_marged_sentence_to_timeranges,
-    map_chinese_to_time_ranges,
-    format_subtitles,
-    split_long_chinese_sentence_v3,
-    generate_custom_prompt
+    map_chinese_to_time_ranges_v2,
+    format_subtitles_v2,
+    split_long_chinese_sentence_v4,
+    generate_custom_prompt,
+    get_video_info_and_download
 )
+from app.core.config import SUBTITLES_DIR, TRANSCRIPTS_DIR, TMP_DIR, AUDIO_DIR
+
 
 # 全局存储任务状态
 tasks_store = {}
 
 
-async def process_translation_task(task_id, youtube_url, custom_prompt="", special_terms="", content_name="", language="zh-CN"):
+async def process_translation_task(task_id, paths, youtube_url, custom_prompt="", special_terms="", content_name="", language="zh-CN"):
     """
     处理翻译任务的主函数
     
@@ -49,19 +51,18 @@ async def process_translation_task(task_id, youtube_url, custom_prompt="", speci
         
         # 1. 获取视频信息
         tasks_store[task_id]["progress"] = 0.1
-        video_info = get_video_info(youtube_url)
+        video_info = get_video_info_and_download(youtube_url, paths["audio"])
         video_title = video_info.get('title', task_id)
         video_id = video_info.get('id', task_id)
         video_channel = video_info.get('channel', task_id)
         tasks_store[task_id]["video_title"] = video_title
         tasks_store[task_id]["video_id"] = video_id
         
-        # 2. 获取文件路径
-        paths = get_file_paths(task_id, video_title, video_id)
-        
-        # 3. 下载音频
+        # 2. 更新进度状态
         tasks_store[task_id]["progress"] = 0.2
-        audio_file = download_audio_webm(youtube_url, paths["audio"])
+        
+        # 3. 获取音频文件路径
+        audio_file = paths["audio"]
         
         # 4. 转写音频
         tasks_store[task_id]["progress"] = 0.4
@@ -78,9 +79,10 @@ async def process_translation_task(task_id, youtube_url, custom_prompt="", speci
         with open(paths["transcript_srt"], "w", encoding="utf-8") as f:
             f.write(srt_text)
         
+        # 250403更新：直接使用asr_result中的句子，不再合并短句子,改用extract_asr_sentences函数
         # 6. 将短句子合并为长句子
         tasks_store[task_id]["progress"] = 0.5
-        numbered_sentences_chunks = merge_incomplete_sentences(srt_text)
+        numbered_sentences_chunks = extract_asr_sentences(srt_text)
         
         # 7. 使用DeepSeek异步并行翻译英文字幕到中文
         tasks_store[task_id]["progress"] = 0.6
@@ -101,15 +103,15 @@ async def process_translation_task(task_id, youtube_url, custom_prompt="", speci
         
         # 9. 给中文翻译匹配时间轴信息
         tasks_store[task_id]["progress"] = 0.8
-        chinese_timeranges_dict = map_chinese_to_time_ranges(llm_trans_result, marged_timeranges_dict)
+        chinese_timeranges_dict = map_chinese_to_time_ranges_v2(llm_trans_result, marged_timeranges_dict)
         
         # 10. 使用中文长句子分割为适合字幕显示的短句
         logger.info("开始处理中文长句子拆分...")
-        short_chinese_subtitles_dict = await split_long_chinese_sentence_v3(chinese_timeranges_dict)
+        short_chinese_subtitles_dict = await split_long_chinese_sentence_v4(chinese_timeranges_dict)
         
         # 11. 将字典转为SRT字符串
         tasks_store[task_id]["progress"] = 0.9
-        cn_srt_content = format_subtitles(short_chinese_subtitles_dict)
+        cn_srt_content = format_subtitles_v2(short_chinese_subtitles_dict)
         
         # 12. 保存中文字幕文件
         with open(paths["subtitle"], "w", encoding="utf-8") as f:
@@ -160,11 +162,25 @@ def create_translation_task(youtube_url, custom_prompt="", special_terms="", con
         "progress": 0,
         "youtube_url": youtube_url
     }
+
+    # 生成各类文件路径
+    paths = {
+        "task_dir": TMP_DIR / task_id,
+        "audio": AUDIO_DIR / f"{task_id}.webm",
+        "transcript": TRANSCRIPTS_DIR / f"{task_id}.json",
+        "transcript_srt": TRANSCRIPTS_DIR / f"{task_id}.srt",
+        "subtitle": SUBTITLES_DIR / f"{task_id}.srt",
+    }
+
+    # 确保任务目录存在
+    paths["task_dir"].mkdir(exist_ok=True)
+
     
     # 创建异步任务
     asyncio.create_task(
         process_translation_task(
             task_id=task_id,
+            paths=paths,
             youtube_url=youtube_url,
             custom_prompt=custom_prompt,
             special_terms=special_terms,

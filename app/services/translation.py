@@ -4,7 +4,8 @@ import asyncio
 import re
 import yt_dlp
 import replicate
-from datetime import datetime, timedelta
+import datetime
+
 from pathlib import Path
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from openai import AsyncOpenAI
@@ -13,7 +14,7 @@ from functools import wraps
 import openai
 import httpx
 
-from app.core.config import REPLICATE_API_TOKEN, DEEPSEEK_API_KEY, RETRY_ATTEMPTS, BATCH_SIZE, MAX_CONCURRENT_TASKS, API_TIMEOUT
+from app.core.config import REPLICATE_API_TOKEN, DEEPSEEK_API_KEY, RETRY_ATTEMPTS, BATCH_SIZE, MAX_CONCURRENT_TASKS, API_TIMEOUT, OPENAI_API_KEY
 from app.core.logging import logger
 from app.utils.file_utils import cleanup_audio_file
 
@@ -92,6 +93,43 @@ def get_video_info(url):
         logger.error(f"获取视频信息失败: {str(e)}", exc_info=True)
         raise
 
+# 250403更新：新增get_video_info_and_download函数，同时获取信息并下载音频
+def get_video_info_and_download(url, file_path):
+    """
+    获取YouTube视频信息
+
+    参数:
+        url (str): YouTube URL
+
+    返回:
+        dict: 视频信息字典
+    """
+    ydl_opts = {
+        'quiet': True,
+        'no_warnings': True,
+        'format': 'bestaudio[ext=webm]',
+        'outtmpl': str(file_path),
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        },
+        'force_ipv4': True,
+        'proxy': 'socks5://8t4v58911-region-US-sid-JaboGcGm-t-5:wl34yfx7@us2.cliproxy.io:443',
+    }
+    print(file_path)
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=True)
+
+    # 确保返回的信息中包含视频ID
+    video_data = {
+        'title': info.get('title', 'Unknown'),
+        'id': info.get('id', ''),  # 提取视频ID
+        'channel': info.get('channel', 'Unknown'),
+        'duration': info.get('duration', 0),
+        # 其他需要的信息...
+    }
+
+    return video_data
+
 
 async def transcribe_audio(file_path):
     """
@@ -159,10 +197,10 @@ def json_to_srt(data):
         srt_lines.append("")  # 添加空行分隔不同字幕段
     return "\n".join(srt_lines)
 
-
-def merge_incomplete_sentences(subtitles):
-    """将英文字幕中的内容合并为完整句子"""
-    # 按行分割字幕文本
+# 250403更新：直接使用asr_result中的句子，不再合并短句子。因此删除此函数
+# def merge_incomplete_sentences(subtitles):
+#     """将英文字幕中的内容合并为完整句子"""
+#     # 按行分割字幕文本
     lines = [line.strip() for line in subtitles.split('\n') if line.strip()]
 
     # 存储合并后的句子
@@ -187,6 +225,24 @@ def merge_incomplete_sentences(subtitles):
     numbered_and_sentences = {i: sentence for i, sentence in enumerate(merged_sentences, start=1)}
 
     return numbered_and_sentences
+
+# 250403更新：新增extract_asr_sentences函数
+def extract_asr_sentences(srt_content):
+  """
+  从 SRT 格式的字幕文本中提取英文句子，并将其存储在一个带有序号的字典中。
+
+  Args:
+    srt_content: SRT 格式的字幕文本字符串。
+
+  Returns:
+    一个字典，键是句子序号，值是对应的英文句子。
+  """
+  sentences = {}
+  pattern = r"(\d+)\n.*? --> .*?\n(.*?)\n"  # 正则表达式匹配句子序号和内容
+  matches = re.findall(pattern, srt_content, re.DOTALL)
+  for match in matches:
+      sentences[int(match[0])] = match[1].strip()
+  return sentences
 
 
 # 通用的异步重试装饰器
@@ -637,15 +693,44 @@ def map_chinese_to_time_ranges(chinese_content, merged_engsentence_to_subtitles)
 
     return chinese_to_time
 
+def map_chinese_to_time_ranges_v2(chinese_content, merged_engsentence_to_subtitles):
+    """
+    给中文翻译添加时间轴，生成未经句子长度优化的初始中文字幕。
+
+    参数:
+        chinese_content (dict): 字典，key 为编号，value 为中文翻译字符串。
+        merged_engsentence_to_subtitles (dict): 字典，key 为编号，value 为一个元组，格式为 (time_range, subtitle)。
+
+    返回:
+        dict: key 为编号，value 为一个字典，包含以下键:
+              - "time_range": 原始时间区间字符串
+              - "text": 对应的中文翻译
+    """
+    chinese_to_time = {}
+
+    for num, chinese_sentence in chinese_content.items():
+        # 如果当前编号在英文字幕合并结果中存在
+        if num in merged_engsentence_to_subtitles:
+            time_range, _ = merged_engsentence_to_subtitles[num]
+            # 用自描述的字典结构保存信息
+            chinese_to_time[num] = {
+                "time_range": time_range,
+                "text": chinese_sentence
+            }
+
+    return chinese_to_time
+
 
 def parse_time(time_str):
     """解析时间字符串为datetime对象"""
     return datetime.strptime(time_str, '%H:%M:%S,%f')
 
 
-def time_to_str(time_obj):
-    """将datetime对象转换为时间字符串"""
-    return time_obj.strftime('%H:%M:%S,%f')[:-3]
+def time_to_str(dt):
+    """
+    将 datetime 对象格式化为 SRT 字幕时间格式：HH:MM:SS,mmm
+    """
+    return dt.strftime("%H:%M:%S,%f")[:-3]
 
 
 async def translate_with_deepseek_async(numbered_sentences_chunks, custom_prompt, special_terms="", content_name="", model='deepseek-chat'):
@@ -669,7 +754,7 @@ async def translate_with_deepseek_async(numbered_sentences_chunks, custom_prompt
         base_url="https://api.deepseek.com",  # 保持原始URL
         timeout=API_TIMEOUT  # 直接使用API_TIMEOUT配置超时
     )
-    
+
     # 创建批次处理任务
     tasks = []
     for i in range(0, len(items), BATCH_SIZE):
@@ -695,22 +780,20 @@ async def translate_with_deepseek_async(numbered_sentences_chunks, custom_prompt
 
     return total_translated_dict
 
+# 050403更新
+# 使用分割后输入的字典内容
+def format_subtitles_v2(subtitles_dict):
+    formatted_str = ""
+    num_counter = 1  # 初始化计数器
+    for key in sorted(subtitles_dict.keys()):
+        subtitle = subtitles_dict[key]
+        formatted_str += f"{num_counter}\n"
+        formatted_str += f"{subtitle['time_range']}\n"
+        formatted_str += f"{subtitle['text']}\n\n"
+        num_counter += 1
+    return formatted_str
 
-def format_subtitles(subtitles_dict):
-    """将字幕字典格式化为SRT格式字符串"""
-    sorted_keys = sorted(subtitles_dict.keys())
-    srt_lines = []
-    
-    for idx, key in enumerate(sorted_keys, start=1):
-        time_range, text = subtitles_dict[key]
-        srt_lines.append(str(idx))
-        srt_lines.append(time_range)
-        srt_lines.append(text)
-        srt_lines.append("")  # 空行分隔
-
-    return "\n".join(srt_lines)
-
-
+# 250403更新：发现两个没有用的函数
 async def robust_transcribe(file_path, max_attempts=3):
     """
     带有重试机制的音频转写函数，处理各种超时和网络错误（异步版本）
@@ -756,7 +839,7 @@ async def robust_transcribe(file_path, max_attempts=3):
     # 重新抛出异常，让调用者处理
     raise last_exception or Exception("最大重试次数已用尽")
 
-
+# 250403更新：发现两个没有用的函数
 # 修改处理音频接口的调用方式
 async def process_audio(audio_path, output_dir, content_name, custom_prompt="", special_terms=""):
     """
@@ -927,3 +1010,403 @@ async def split_long_chinese_sentence_v3(chinese_timeranges_dict, model='deepsee
     
     logger.info(f"长句子拆分完成：原始{len(chinese_timeranges_dict)}个条目，拆分后{len(final_dict)}个条目")
     return final_dict 
+
+# 250403更新
+# 全新的长句分割方法。对于无法按照规则分割的句子，调用异步LLM分割
+def time_to_str(dt):
+    """
+    将 datetime 对象格式化为 SRT 字幕时间格式：HH:MM:SS,mmm
+    """
+    return dt.strftime("%H:%M:%S,%f")[:-3]
+
+def parse_time_range(time_range_str):
+    """
+    解析形如 "HH:MM:SS,mmm --> HH:MM:SS,mmm" 的时间区间字符串，
+    返回起始时间和结束时间对应的 datetime 对象。
+    此处以 1900-01-01 为基础日期。
+    """
+    try:
+        start_str, end_str = time_range_str.split(" --> ")
+        base_date = datetime.date(1900, 1, 1)
+        start_dt = datetime.datetime.strptime(f"{base_date} {start_str}", "%Y-%m-%d %H:%M:%S,%f")
+        end_dt = datetime.datetime.strptime(f"{base_date} {end_str}", "%Y-%m-%d %H:%M:%S,%f")
+        return start_dt, end_dt
+    except Exception as e:
+        logger.error(f"解析时间范围错误: {time_range_str}, 错误: {str(e)}")
+        raise
+
+def split_sentence(text):
+    """
+    对输入的中文句子进行分割：
+    1. 只有长度大于25个字符的句子才进行分割（正好25个字符的不处理）；
+    2. 以空格为分割标志，但仅当空格两边都是中文字符时进行分割；
+    3. 分割后每一部分必须至少有5个字符（允许恰好5个字符）；
+    4. 对长句子采用递归方式处理所有符合条件的分割点。
+    """
+    if len(text) <= 20:
+        return [text]
+
+    pattern = re.compile(
+    r'(?<=[\u4e00-\u9fff])\s+(?=[A-Za-z0-9\u4e00-\u9fff])'
+    r'|(?<=[A-Za-z0-9])\s+(?=[\u4e00-\u9fff])')
+    matches = list(pattern.finditer(text))
+
+    for match in matches:
+        left = text[:match.start()]
+        right = text[match.end():]
+        if len(left) >= 5 and len(right) >= 5:
+            return [left] + split_sentence(right)
+
+    return [text]
+
+def assign_time_ranges(start_time, end_time, segments):
+    """
+    根据起始时间、结束时间和文本片段列表，计算每个片段对应的时间区间。
+    返回列表中每个元素为元组：(起始时间字符串, 结束时间字符串, 文本片段)
+    """
+    total_duration = (end_time - start_time).total_seconds()
+    total_chars = sum(len(seg) for seg in segments)
+    
+    if total_chars == 0:
+        logger.warning("分配时间区间时发现总字符数为零，返回空列表")
+        return []
+    per_char_duration = total_duration / total_chars
+
+    assigned_ranges = []
+    current_time = start_time
+    for seg in segments:
+        seg_duration = len(seg) * per_char_duration
+        new_end = current_time + datetime.timedelta(seconds=seg_duration)
+        assigned_ranges.append((time_to_str(current_time), time_to_str(new_end), seg))
+        current_time = new_end
+    return assigned_ranges
+
+async def split_long_chinese_sentence_v4(chinese_timeranges_dict):
+    """
+    处理 chinese_timeranges_dict 中的长文本，分两个阶段：
+
+    第一阶段：初步处理
+      - 使用 split_sentence 和 assign_time_ranges 对每条字幕进行分割，
+      - 生成初步字幕字典 initial_subtitles。
+
+    第二阶段：批量进一步处理
+      - 筛选出初步字幕字典中需要进一步分割的条目（文本长度大于25）；
+      - 批量调用 LLM 分割接口（batch_llm_process，占位符实现），
+      - 对于每个需要处理的条目，依据其原始时间区间重新计算分割后的多个片段对应的时间区间，
+      - 将原条目拆分为多条新的字幕，生成最终字幕字典。
+    """
+    logger.info(f"开始执行长句分割(v4)，输入字典大小: {len(chinese_timeranges_dict)}条")
+    
+    # 第一阶段：初步处理
+    logger.info("第一阶段：使用规则分割和时间区间分配")
+    initial_subtitles = {}
+    new_index = 1
+    
+    phase1_split_count = 0  # 记录第一阶段分割的数量
+    
+    for key, item in chinese_timeranges_dict.items():
+        time_range = item[0] if isinstance(item, tuple) else item.get("time_range")
+        text = item[1] if isinstance(item, tuple) else item.get("text", "")
+        
+        logger.debug(f"处理字幕 #{key}: '{text[:30]}{'...' if len(text) > 30 else ''}', 时间范围: {time_range}")
+        
+        try:
+            start_dt, end_dt = parse_time_range(time_range)
+            segments = split_sentence(text)
+            
+            if len(segments) > 1:
+                phase1_split_count += 1
+                logger.debug(f"字幕 #{key} 被规则分割为 {len(segments)} 段")
+            
+            assigned_segments = assign_time_ranges(start_dt, end_dt, segments)
+            
+            for start_time_str, end_time_str, seg_text in assigned_segments:
+                initial_subtitles[new_index] = {
+                    "time_range": f"{start_time_str} --> {end_time_str}",
+                    "text": seg_text
+                }
+                new_index += 1
+        except Exception as e:
+            logger.error(f"处理字幕 #{key} 时出错: {str(e)}")
+            # 保留原始字幕，避免丢失内容
+            initial_subtitles[new_index] = {
+                "time_range": time_range,
+                "text": text
+            }
+            new_index += 1
+
+    logger.info(f"第一阶段完成: 处理 {len(chinese_timeranges_dict)} 条字幕，通过规则分割了 {phase1_split_count} 条，生成 {len(initial_subtitles)} 条初步字幕")
+
+    # 第二阶段：批量处理需要进一步分割的字幕
+    logger.info("第二阶段：使用LLM进一步分割长句子")
+    keys_to_process = []
+    texts_to_process = []
+    
+    # 这里以文本长度大于20作为需要进一步分割的条件
+    for key, value in initial_subtitles.items():
+        if len(value["text"]) > 20:
+            keys_to_process.append(key)
+            texts_to_process.append(value["text"])
+    
+    logger.info(f"需要通过LLM进一步分割的字幕: {len(keys_to_process)} 条")
+    
+    if texts_to_process:
+        try:
+            texts_to_llm = {str(i+1): text for i, text in enumerate(texts_to_process)}
+            logger.info(f"开始调用LLM批量分割长句，共 {len(texts_to_llm)} 条")
+            
+            llm_results = await llm_batches_split(texts_to_llm)
+            logger.info(f"LLM分割完成，返回 {len(llm_results.get('results', []))} 条结果")
+            
+            # 构建最终的字幕字典，拆分后的多条字幕需要重新计算时间区间
+            final_subtitles = {}
+            final_index = 1
+            llm_split_count = 0  # 记录LLM成功分割的条目数
+            
+            # 遍历初步字幕字典，对需要进一步处理的条目做处理
+            for key, value in initial_subtitles.items():
+                if key in keys_to_process:
+                    # 从当前字幕中获取原始文本
+                    original_text = value["text"]
+                    # 通过匹配 "original" 字段查找对应的 LLM 处理结果
+                    matched_result = None
+                    for result in llm_results.get("results", []):
+                        if result.get("original") == original_text:
+                            matched_result = result
+                            break
+                    
+                    # 如果没有匹配到，直接使用原始文本作为唯一分割项
+                    if matched_result is None:
+                        logger.warning(f"未找到字幕 #{key} 的LLM分割结果，保持原样: '{original_text[:30]}{'...' if len(original_text) > 30 else ''}'")
+                        segmented_texts = [original_text]
+                    else:
+                        segmented_texts = matched_result.get("segmented", [original_text])
+                        if len(segmented_texts) > 1:
+                            llm_split_count += 1
+                            logger.debug(f"字幕 #{key} 被LLM分割为 {len(segmented_texts)} 段")
+
+                    # 使用原始时间区间重新分配新的时间
+                    try:
+                        original_time_range = value["time_range"]
+                        start_dt, end_dt = parse_time_range(original_time_range)
+                        new_assigned_segments = assign_time_ranges(start_dt, end_dt, segmented_texts)
+                        
+                        for start_time_str, end_time_str, seg_text in new_assigned_segments:
+                            final_subtitles[final_index] = {
+                                "time_range": f"{start_time_str} --> {end_time_str}",
+                                "text": seg_text
+                            }
+                            final_index += 1
+                    except Exception as e:
+                        logger.error(f"处理LLM分割结果时发生错误 (字幕 #{key}): {str(e)}")
+                        # 保留原始字幕作为回退选项
+                        final_subtitles[final_index] = value
+                        final_index += 1
+                else:
+                    final_subtitles[final_index] = value
+                    final_index += 1
+            
+            logger.info(f"LLM成功分割了 {llm_split_count}/{len(keys_to_process)} 条字幕")
+            initial_subtitles = final_subtitles
+            
+        except Exception as e:
+            logger.error(f"LLM批量分割过程中发生错误: {str(e)}")
+            # 出错时保留第一阶段的结果
+            logger.warning("由于LLM分割错误，保留第一阶段的分割结果")
+
+    logger.info(f"长句分割(v4)完成: 输入 {len(chinese_timeranges_dict)} 条字幕，输出 {len(initial_subtitles)} 条分割后的字幕")
+    return initial_subtitles
+
+# 250403更新
+# 异步LLM分割相关函数
+# 通用的异步重试装饰器
+def async_retry(max_attempts=None, exceptions=None):
+    """异步函数的重试装饰器"""
+    if max_attempts is None:
+        max_attempts = RETRY_ATTEMPTS  # 替换为直接使用RETRY_ATTEMPTS配置，而不是CONFIG字典
+    if exceptions is None:
+        exceptions = (aiohttp.ClientError, json.JSONDecodeError, Exception)  # 修改为合适的异常类型
+    
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            last_exception = None
+            for attempt in range(max_attempts):
+                try:
+                    return await func(*args, **kwargs)
+                except exceptions as e:
+                    last_exception = e
+                    # 指数退避策略
+                    wait_time = min(1 * (2 ** attempt), 8)  # 使用固定的退避策略参数
+                    logger.warning(f"尝试 {attempt+1}/{max_attempts} 失败: {str(e)}，等待 {wait_time}秒后重试")
+                    await asyncio.sleep(wait_time)
+            # 所有重试都失败了
+            logger.error(f"达到最大重试次数 {max_attempts}，最后错误: {str(last_exception)}")
+            raise last_exception or Exception("最大重试次数已用尽")
+        return wrapper
+    return decorator
+
+async def llm_batches_split(long_sentences, model='deepseek-chat'):
+    """
+    使用LLM分割长句子,创建异步任务
+
+    参数：
+    long_sentences: 需要分割的长句子字典
+    model: 使用的模型名称
+
+    返回：
+    dict:分割结果字典,格式为
+    {
+    "results": [
+        {"original": 原句1, "segmented": [句子1, 句子2]},
+        {"original": 原句2, "segmented": [句子1, 句子2]}
+    ]
+    }
+    """
+    logger.info(f"开始使用LLM批量分割长句, 使用模型: {model}, 输入句子数: {len(long_sentences)}")
+    
+    total_segment_dict = {
+        'results':[]
+    }
+    items = list(long_sentences.items())
+
+    # 创建锁和信号量
+    semaphore = asyncio.Semaphore(MAX_CONCURRENT_TASKS)  # 使用MAX_CONCURRENT_TASKS配置
+
+    # 创建异步OpenAI客户端
+    client = AsyncOpenAI(
+        api_key=DEEPSEEK_API_KEY,  # 使用导入的API密钥
+        base_url="https://api.deepseek.com"
+    )
+
+    # 创建批次处理任务
+    tasks = []
+    for i in range(0, len(items), BATCH_SIZE):  # 使用导入的BATCH_SIZE
+        chunk = items[i:i + BATCH_SIZE]
+        tasks.append(
+            split_process_chunk(chunk, model, client, semaphore)
+        )
+    
+    logger.info(f"创建了 {len(tasks)} 个并行任务进行长句分割")
+
+    # 并行执行所有任务
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    
+    # 处理结果
+    success_count = 0
+    for result in results:
+        if isinstance(result, Exception):
+            logger.error(f"批次处理失败: {str(result)}")
+            continue
+        
+        # 更新分割结果
+        if 'results' in result:
+            total_segment_dict['results'].extend(result.get('results',[]))
+            success_count += 1
+
+    logger.info(f"LLM批量分割完成: {success_count}/{len(tasks)} 批次成功, 共处理 {len(total_segment_dict['results'])} 条句子")
+    return total_segment_dict
+
+@async_retry()
+async def split_safe_api_call_async(client, messages, model, temperature, top_p, frequency_penalty, presence_penalty):
+    """安全的异步API调用,内置重试机制"""
+    try:
+        response = await client.chat.completions.create(
+            model=model,
+            response_format={'type': "json_object"},
+            messages=messages,
+            temperature=temperature,
+            top_p=top_p,
+            frequency_penalty=frequency_penalty,
+            presence_penalty=presence_penalty,
+        )
+
+        # 检查响应结构
+        if not hasattr(response, 'choices') or len(response.choices) == 0:
+            logger.error("API响应缺少choices字段")
+            raise ValueError("无效的API响应结构")
+
+        message = response.choices[0].message
+        if not hasattr(message, 'content'):
+            logger.error("API响应缺少content字段")
+            raise ValueError("响应中缺少翻译内容")
+
+        # 预验证JSON格式
+        try:
+            json.loads(message.content)
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON预验证失败: {message.content[:100]}...")
+            raise
+
+        return response
+
+    except openai.APIConnectionError as e:
+        logger.error(f"API连接错误: {str(e)}")
+        raise
+    except openai.APITimeoutError as e:
+        logger.error(f"API超时错误: {str(e)}")
+        raise
+    except openai.RateLimitError as e:
+        logger.error(f"API速率限制错误: {str(e)}")
+        raise
+    except Exception as e:
+        logger.error(f"异步API调用失败: {str(e)}")
+        raise
+
+async def split_process_chunk(chunk, model, client, semaphore):
+    """
+    处理单个分割批次
+    """
+    async with semaphore:
+        logger.debug(f"开始处理批次, 包含 {len(chunk)} 条句子")
+        result = {'results': []}
+
+        chunk_str = json.dumps(chunk, ensure_ascii=False)
+        logger.debug(f"批次数据样本: {chunk_str[:100]}...")
+        
+        segment_prompt = f'''
+                        请按以下规则处理三重反引号内的中文长句集合：
+                        1. 输入格式示例：
+                        {{"1":"句子1",
+                        "2":"句子2"}}
+
+                        2. 智能分割：
+                        - 只拆分长句，不要改变句子的内容
+                        - 分割时，请保持"语言完整性"
+                        - 优先在空格处拆分，保持术语完整（如"NASA"、"5G NR"）
+                        - 每短句10-15个字符，最多不要超过20个字符
+                        3. 使用json格式输出：
+                        {{
+                        "results": [
+                            {{
+                            "original": "原句1",
+                            "segmented": ["短句1", "短句2"]
+                            }},
+                            {{
+                            "original": "原句2",
+                            "segmented": ["短句1", "短句2"]
+                            }}
+                        ],
+                        }}
+
+                        需要处理的长句：```{chunk_str}```
+                        '''
+
+    response = await split_safe_api_call_async(
+        client=client,
+        messages=[
+            {"role": "user", "content": segment_prompt}
+        ],
+        model=model,
+        temperature=0,
+        top_p=1,
+        frequency_penalty=0,
+        presence_penalty=0,
+    )
+
+    segment_results = response.choices[0].message.content
+    result_to_json = json.loads(segment_results)
+    result.update(result_to_json)
+
+    return result
+

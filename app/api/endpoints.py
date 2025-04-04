@@ -79,7 +79,7 @@ async def get_subtitle_file(task_id: str):
 
     # 使用视频id查找字幕文件
     video_id = task_info.get("video_id", task_id)
-    subtitle_file = SUBTITLES_DIR / f"{video_id}.srt"
+    subtitle_file = SUBTITLES_DIR / f"{task_id}.srt"
     logger.info(f"字幕文件路径: {subtitle_file}")
     
     

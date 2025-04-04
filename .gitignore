@@ -22,6 +22,7 @@ ENV/
 # 日志文件
 logs/
 *.log
+api_documentation.txt
 
 # 数据文件夹
 static/subtitles/
