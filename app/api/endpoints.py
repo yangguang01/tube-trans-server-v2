@@ -28,7 +28,8 @@ async def translate_video(request: TranslationRequest):
         custom_prompt=request.custom_prompt,
         special_terms=request.special_terms,
         content_name=request.content_name,
-        language=request.language
+        language=request.language,
+        model=request.model
     )
     
     return {"task_id": task_id, "status": "pending"}

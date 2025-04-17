@@ -104,6 +104,7 @@ def get_video_info_and_download(url, file_path):
     返回:
         dict: 视频信息字典
     """
+    logger.info("任务开始! 音频下载中...")
     ydl_opts = {
         'quiet': True,
         'no_warnings': True,
@@ -275,27 +276,13 @@ def async_retry(max_attempts=None, exceptions=None):
 @async_retry()
 async def safe_api_call_async(client, messages, model):
     """安全的异步API调用，内置重试机制"""
+    api_type = "OpenAI" if "gpt" in model.lower() else "DeepSeek"
+    
     try:
-        # 使用自定义超时设置
-        timeout_settings = aiohttp.ClientTimeout(
-            total=API_TIMEOUT,
-            connect=30.0,       # 增加连接超时
-            sock_connect=30.0,  # 增加套接字连接超时
-            sock_read=API_TIMEOUT  # 套接字读取超时 - 这是关键参数
-        )
+        logger.info(f"开始调用{api_type} API, 模型:{model}")
         
-        # 创建新的AsyncOpenAI客户端实例，包含超时设置
-        # 不要尝试修改原始客户端的内部会话
-        temp_client = AsyncOpenAI(
-            api_key=client.api_key,
-            base_url=client.base_url,  # 使用传入客户端的base_url
-            #timeout=timeout_settings
-        )
-        
-        logger.info(f"开始调用DeepSeek API, 模型:{model}, base_url:{client.base_url}")
-        
-        # 使用新客户端发送请求
-        response = await temp_client.chat.completions.create(
+        # 使用传入客户端发送请求
+        response = await client.chat.completions.create(
             model=model,
             response_format={'type': "json_object"},
             messages=messages,
@@ -339,7 +326,7 @@ async def safe_api_call_async(client, messages, model):
         cause_str = str(cause) if cause else 'None'
         
         # 输出详细错误信息
-        logger.error(f"DeepSeek API连接错误详情: {str(e)}")
+        logger.error(f"{api_type} API连接错误详情: {str(e)}")
         logger.error(f"状态码: {status_code}, 错误码: {error_code}")
         logger.error(f"底层异常: {cause_type}: {cause_str}")
         logger.error(f"堆栈跟踪: {traceback.format_exc()}")
@@ -348,7 +335,7 @@ async def safe_api_call_async(client, messages, model):
         raise
         
     except openai.APITimeoutError as e:
-        logger.error(f"DeepSeek API超时: {str(e)}")
+        logger.error(f"{api_type} API超时: {str(e)}")
         logger.error(f"超时详情: {traceback.format_exc()}")
         raise
         
@@ -357,7 +344,7 @@ async def safe_api_call_async(client, messages, model):
         status_code = getattr(e, 'status_code', 'unknown')
         error_code = getattr(e, 'code', 'unknown')
         
-        logger.error(f"DeepSeek API速率限制: {str(e)}")
+        logger.error(f"{api_type} API速率限制: {str(e)}")
         logger.error(f"状态码: {status_code}, 错误码: {error_code}")
         raise
         
@@ -366,7 +353,7 @@ async def safe_api_call_async(client, messages, model):
         status_code = getattr(e, 'status_code', 'unknown')
         error_code = getattr(e, 'code', 'unknown')
         
-        logger.error(f"DeepSeek API响应验证错误: {str(e)}")
+        logger.error(f"{api_type} API响应验证错误: {str(e)}")
         logger.error(f"状态码: {status_code}, 错误码: {error_code}")
         raise
         
@@ -375,7 +362,7 @@ async def safe_api_call_async(client, messages, model):
         status_code = getattr(e, 'status_code', 'unknown')
         error_code = getattr(e, 'code', 'unknown')
         
-        logger.error(f"DeepSeek API验证错误: {str(e)}")
+        logger.error(f"{api_type} API验证错误: {str(e)}")
         logger.error(f"状态码: {status_code}, 错误码: {error_code}")
         raise
         
@@ -385,7 +372,7 @@ async def safe_api_call_async(client, messages, model):
         error_code = getattr(e, 'code', 'unknown')
         param = getattr(e, 'param', 'unknown')
         
-        logger.error(f"DeepSeek API请求错误: {str(e)}")
+        logger.error(f"{api_type} API请求错误: {str(e)}")
         logger.error(f"状态码: {status_code}, 错误码: {error_code}, 参数: {param}")
         raise
         
@@ -414,7 +401,8 @@ def generate_custom_prompt(video_title: str, channel_name: str, custom_prompt: s
         full_custom_prompt = f"video title: {video_title}\nchannel name: {channel_name}"
     return full_custom_prompt
 
-async def process_chunk(chunk, custom_prompt, model, client, semaphore):
+# 250417更新
+async def process_chunk(chunk, custom_prompt, model, client, semaphore, system_prompt_template):
     """处理单个翻译批次"""
     async with semaphore:
         result = {
@@ -427,65 +415,20 @@ async def process_chunk(chunk, custom_prompt, model, client, semaphore):
         end_item_number = first_item_number + check_chunk_string - 1
         
         logger.info(f"个性化提示词: {custom_prompt}")
-        # 构造系统提示
-        trans_json_user_prompt_v3 = f'''
-        # Role
-        You are a skilled translator specializing in converting English subtitles into natural and fluent Chinese while maintaining the original meaning.
-
-        # Background information of the translation content
-        {custom_prompt}
-        Please identify the professional domain of the video content based on the information provided above, and leverage domain-specific knowledge and terminology to deliver an accurate and contextually appropriate translation.
-
-        ## Skills
-        ### Skill 1: Line-by-Line Translation
-        - Emphasize the importance of translating English subtitles line by line to ensure accuracy and coherence.
-        - Strictly follow the rule of translating each subtitle line individually based on the input content.
-        In cases where a sentence is split, such as:
-        125.	But what's even more impressive is their U.S.
-        126.	commercial revenue projection.
-
-        Step 1: Merge the split sentence into a complete sentence.
-        Step 2: Translate the merged sentence into Chinese.
-        Step 3: When outputting the Chinese translation, insert the translated result into both of the original split sentence positions.
-
-        Example of this process:
-          125.	But what's even more impressive is their U.S.
-        但更令人印象深刻的是他们的美国业务
-          126.	commercial revenue projection.
-        但更令人印象深刻的是他们的美国业务
-
-        ### Skill 2: Contextual Translation
-        - Consider the context of the video to ensure accuracy and coherence in the translation.
-        - When slang or implicit information appears in the original text, do not translate it literally. Instead, adapt it to align with natural Chinese communication habits.
-
-        ### Skill 3: Handling Complex Sentences
-        - Rearrange word order and adjust wording for complex sentence structures to ensure translations are easily understandable and fluent in Chinese.
-
-        ### Skill 4: Proper Nouns and Special Terms
-        - Identify proper nouns and special terms enclosed in angle brackets < > within the subtitle text, and retain them in their original English form.
-
-        ### Skill 5: Ignore spelling errors
-        - The English content is automatically generated by ASR and may contain spelling errors. Please ignore such errors and translate normally when encountered.
-
-        ## Constraints
-        - For punctuation requirements: Do not add a period when the sentence ends
-        - The provided subtitles range from line {first_item_number} to line {end_item_number}, totaling {check_chunk_string} lines.
-        - Provide the Chinese translation in the specified JSON format:
-          ```
-          {{
-          "1": "<Translation of subtitle line 1>",
-          "2": "<Translation of subtitle line 2>",
-          "3": "<Translation of subtitle line 3>",
-          ...
-          }}
-          ```
-        '''
+        
+        # 格式化系统提示模板
+        trans_json_user_prompt = system_prompt_template.format(
+            custom_prompt=custom_prompt,
+            first_item_number=first_item_number,
+            end_item_number=end_item_number,
+            check_chunk_string=check_chunk_string
+        )
         try:
             # 初次API调用
             response = await safe_api_call_async(
                 client=client,
                 messages=[
-                    {"role": "system", "content": trans_json_user_prompt_v3},
+                    {"role": "system", "content": trans_json_user_prompt},
                     {"role": "user", "content": chunk_string}
                 ],
                 model=model
@@ -504,27 +447,17 @@ async def process_chunk(chunk, custom_prompt, model, client, semaphore):
                 result['translations'].update(translated_dict)
             else:
                 # 进入重试逻辑
+                logger.info(f'编号{first_item_number}进入重试逻辑!!!')
                 retry_prompt_v2 = f'''
-                The result of your previous translation attempt was problematic. The content I provided contains {check_chunk_string} lines, but your translation output had {check_translated} lines, indicating a mismatch.
+                The previous translation had a mismatch (English: {check_chunk_string} lines, Chinese: {check_translated} lines).
 
-                Please carefully review the translation guidelines and ensure that you translate the subtitles line by line, maintaining a one-to-one correspondence between the original English lines and the translated Chinese lines.
+                Please carefully translate each line individually, maintaining a strict one-to-one match between English and Chinese lines (lines {first_item_number}-{end_item_number}, total {check_chunk_string} lines).
 
-                Translation guidelines:
-                - Translate the subtitles line by line, ensuring that the number of lines in your translation matches the number of lines in the original English subtitles.
-                - The subtitles to be translated range from line {first_item_number} to line {end_item_number}, totaling {check_chunk_string} lines.
-                - When encountering complex sentence structures, rearrange the word order and adjust the wording to ensure the translation is easily understandable and fluent in Chinese while still maintaining the original meaning.
-                - Identify proper nouns and special terms enclosed in angle brackets < > within the subtitle text, and keep them in their original English form without translation.
-                - Consider the context of the video when translating to ensure accuracy and coherence.
+                Return your translation in this JSON format:
 
-                Background information of the translation content
-                {custom_prompt}
-                Please identify the professional domain of the video content based on the information provided above, and leverage domain-specific knowledge and terminology to deliver an accurate and contextually appropriate translation.
-
-                Please provide your revised Chinese translation in the following JSON format:
                 {{
-                "1": "<Translation of subtitle line 1>",
-                "2": "<Translation of subtitle line 2>",
-                "3": "<Translation of subtitle line 3>",
+                "1": "<Translated line 1>",
+                "2": "<Translated line 2>",
                 ...
                 }}
                 '''
@@ -536,7 +469,7 @@ async def process_chunk(chunk, custom_prompt, model, client, semaphore):
                         return await safe_api_call_async(
                             client=client,
                             messages=[
-                                {"role": "system", "content": trans_json_user_prompt_v3},
+                                {"role": "system", "content": trans_json_user_prompt},
                                 {"role": "assistant", "content": translated_string},
                                 {"role": "user", "content": retry_prompt_v2}
                             ],
@@ -558,7 +491,7 @@ async def process_chunk(chunk, custom_prompt, model, client, semaphore):
                     check_retry = len(retrytrans_to_json)
                     if check_retry == check_chunk_string:
                         # 处理成功重试
-                        logger.info("重试有效！")
+                        logger.info("编号{first_item_number}重试有效！")
                         
                         # 对翻译后的字符串进行处理
                         new_num_dict = process_transdict_num(retrytrans_to_json, first_item_number, end_item_number)
@@ -566,7 +499,7 @@ async def process_chunk(chunk, custom_prompt, model, client, semaphore):
                         
                         result['translations'].update(translated_dict)
                     else:
-                        raise ValueError(f"重试后行数仍不匹配 ({check_retry} vs {check_chunk_string})")
+                        raise ValueError(f"编号{first_item_number}重试后行数仍不匹配 ({check_retry} vs {check_chunk_string})")
 
                 except Exception as retry_error:
                     logger.error(f"重试失败: {str(retry_error)}")
@@ -1246,7 +1179,7 @@ def async_retry(max_attempts=None, exceptions=None):
         return wrapper
     return decorator
 
-async def llm_batches_split(long_sentences, model='deepseek-chat'):
+async def llm_batches_split(long_sentences, model='gpt-4.1-mini'):
     """
     使用LLM分割长句子,创建异步任务
 
@@ -1275,8 +1208,8 @@ async def llm_batches_split(long_sentences, model='deepseek-chat'):
 
     # 创建异步OpenAI客户端
     client = AsyncOpenAI(
-        api_key=DEEPSEEK_API_KEY,  # 使用导入的API密钥
-        base_url="https://api.deepseek.com"
+        api_key=OPENAI_API_KEY,
+        #base_url="https://api.deepseek.com"
     )
 
     # 创建批次处理任务
@@ -1410,3 +1343,199 @@ async def split_process_chunk(chunk, model, client, semaphore):
 
     return result
 
+# 250403更新
+async def translate_subtitles(numbered_sentences_chunks, custom_prompt, model_choice="gpt", special_terms="", content_name=""):
+    """
+    统一的字幕翻译函数，支持不同模型选择
+    
+    Args:
+        numbered_sentences_chunks: 编号的句子块
+        custom_prompt: 自定义提示词
+        model_choice: 模型选择，可选值为 "deepseek" 或 "gpt"
+        special_terms: 特殊术语列表
+        content_name: 内容名称
+    
+    Returns:
+        翻译后的字典
+    """
+    if model_choice.lower() == "deepseek":
+        model = 'deepseek-chat'
+        return await translate_with_model(
+            numbered_sentences_chunks, 
+            custom_prompt, 
+            model=model,
+            api_key=DEEPSEEK_API_KEY,
+            special_terms=special_terms, 
+            content_name=content_name
+        )
+    elif model_choice.lower() == "gpt":
+        model = 'gpt-4.1-mini'
+        return await translate_with_model(
+            numbered_sentences_chunks, 
+            custom_prompt, 
+            model=model,
+            api_key=OPENAI_API_KEY,
+            special_terms=special_terms, 
+            content_name=content_name
+        )
+    else:
+        raise ValueError(f"不支持的模型选择: {model_choice}，请选择 'deepseek' 或 'gpt'")
+
+async def translate_with_model(numbered_sentences_chunks, custom_prompt, model, api_key, special_terms="", content_name=""):
+    """
+    统一的模型翻译实现函数
+    """
+    items = list(numbered_sentences_chunks.items())
+    total_translated_dict = {}
+
+    # 处理特殊术语
+    if special_terms:
+        special_terms = special_terms.rstrip(".")
+        special_terms_list = special_terms.split(", ")
+
+    # 创建信号量
+    semaphore = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
+    
+    # 基于模型类型创建适当的客户端
+    if "deepseek" in model.lower():
+        client = AsyncOpenAI(
+            api_key=api_key, 
+            base_url="https://api.deepseek.com",  # DeepSeek的API地址
+            timeout=API_TIMEOUT
+        )
+        logger.info(f"使用DeepSeek API客户端，模型: {model}")
+    elif "gpt" in model.lower():
+        client = AsyncOpenAI(
+            api_key=api_key,
+            timeout=API_TIMEOUT
+        )
+        logger.info(f"使用OpenAI API客户端，模型: {model}")
+    else:
+        # 处理未知模型类型
+        raise ValueError(f"不支持的模型类型: {model}")
+
+    # 获取适合当前模型的提示词
+    system_prompt = get_system_prompt_for_model(model)
+
+    # 创建批次处理任务
+    tasks = []
+    for i in range(0, len(items), BATCH_SIZE):
+        chunk = items[i:i + BATCH_SIZE]
+        tasks.append(
+            process_chunk(chunk, custom_prompt, model, client, semaphore, system_prompt)
+        )
+        logger.debug(f"任务序号: {i}")
+    
+    # 并行执行所有任务
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    
+    # 处理结果
+    for result in results:
+        if isinstance(result, Exception):
+            logger.error(f"批次处理失败: {str(result)}")
+            continue
+        
+        # 更新翻译结果
+        translations = result.get('translations', {})
+        total_translated_dict.update(translations)
+
+    logger.info(f'使用的模型：{model}')
+
+    return total_translated_dict
+
+def get_system_prompt_for_model(model):
+    """
+    根据不同模型返回适合的系统提示词模板
+    """
+    if "deepseek" in model.lower():
+        # DeepSeek 的提示词包含处理分割句子的详细说明
+        return """
+        # Role
+        You are a skilled translator specializing in converting English subtitles into natural and fluent Chinese while maintaining the original meaning.
+
+        # Background information of the translation content
+        {custom_prompt}
+        Please identify the professional domain of the video content based on the information provided above, and leverage domain-specific knowledge and terminology to deliver an accurate and contextually appropriate translation.
+
+        ## Skills
+        ### Skill 1: Line-by-Line Translation
+        - Emphasize the importance of translating English subtitles line by line to ensure accuracy and coherence.
+        - Strictly follow the rule of translating each subtitle line individually based on the input content.
+        In cases where a sentence is split, such as:
+        125.    But what's even more impressive is their U.S.
+        126.    commercial revenue projection.
+
+        Step 1: Merge the split sentence into a complete sentence.
+        Step 2: Translate the merged sentence into Chinese.
+        Step 3: When outputting the Chinese translation, insert the translated result into both of the original split sentence positions.
+
+        Example of this process:
+          125.    But what's even more impressive is their U.S.
+        但更令人印象深刻的是他们的美国业务
+          126.    commercial revenue projection.
+        但更令人印象深刻的是他们的美国业务
+
+        ### Skill 2: Contextual Translation
+        - Consider the context of the video to ensure accuracy and coherence in the translation.
+        - When slang or implicit information appears in the original text, do not translate it literally. Instead, adapt it to align with natural Chinese communication habits.
+
+        ### Skill 3: Handling Complex Sentences
+        - Rearrange word order and adjust wording for complex sentence structures to ensure translations are easily understandable and fluent in Chinese.
+
+        ### Skill 4: Proper Nouns and Special Terms
+        - Identify proper nouns and special terms enclosed in angle brackets < > within the subtitle text, and retain them in their original English form.
+
+        ### Skill 5: Ignore spelling errors
+        - The English content is automatically generated by ASR and may contain spelling errors. Please ignore such errors and translate normally when encountered.
+
+        ## Constraints
+        - For punctuation requirements: Do not add a period when the sentence ends
+        - The provided subtitles range from line {first_item_number} to line {end_item_number}, totaling {check_chunk_string} lines.
+        - Provide the Chinese translation in the specified JSON format:
+          ```
+          {{
+          "1": "<Translation of subtitle line 1>",
+          "2": "<Translation of subtitle line 2>",
+          "3": "<Translation of subtitle line 3>",
+          ...
+          }}
+          ```
+        """
+    else:
+        # GPT-4.1-mini 的简化提示词
+        return """
+        # Role
+        You are a skilled translator specializing in converting English subtitles into natural and fluent Chinese while maintaining the original meaning.
+
+        # Background information of the translation content
+        {custom_prompt}
+        Please identify the professional domain of the video content based on the information provided above, and leverage domain-specific knowledge and terminology to deliver an accurate and contextually appropriate translation.
+
+        ## Skills
+        ### Skill 1: Line-by-Line Translation
+        - Emphasize the importance of translating English subtitles line by line to ensure accuracy and coherence.
+        - Strictly follow the rule of translating each subtitle line individually based on the input content.
+
+        ### Skill 2: Contextual Translation
+        - Consider the context of the video to ensure accuracy and coherence in the translation.
+        - When slang or implicit information appears in the original text, do not translate it literally. Instead, adapt it to align with natural Chinese communication habits.
+
+        ### Skill 3: Handling Complex Sentences
+        - Rearrange word order and adjust wording for complex sentence structures to ensure translations are easily understandable and fluent in Chinese.
+
+        ### Skill 4: Proper Nouns and Special Terms
+        - Identify proper nouns and special terms enclosed in angle brackets < > within the subtitle text, and retain them in their original English form.
+
+        ## Constraints
+        - For punctuation requirements: Do not add a period when the sentence ends
+        - The provided subtitles range from line {first_item_number} to line {end_item_number}, totaling {check_chunk_string} lines.
+        - Provide the Chinese translation in the specified JSON format:
+          ```
+          {{
+          "1": "<Translation of subtitle line 1>",
+          "2": "<Translation of subtitle line 2>",
+          "3": "<Translation of subtitle line 3>",
+          ...
+          }}
+          ```
+        """

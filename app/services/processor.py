@@ -23,7 +23,8 @@ from app.services.translation import (
     format_subtitles_v2,
     split_long_chinese_sentence_v4,
     generate_custom_prompt,
-    get_video_info_and_download
+    get_video_info_and_download,
+    translate_subtitles
 )
 from app.core.config import SUBTITLES_DIR, TRANSCRIPTS_DIR, TMP_DIR, AUDIO_DIR
 
@@ -32,7 +33,7 @@ from app.core.config import SUBTITLES_DIR, TRANSCRIPTS_DIR, TMP_DIR, AUDIO_DIR
 tasks_store = {}
 
 
-async def process_translation_task(task_id, paths, youtube_url, custom_prompt="", special_terms="", content_name="", language="zh-CN"):
+async def process_translation_task(task_id, paths, youtube_url, custom_prompt="", special_terms="", content_name="", language="zh-CN", model=None):
     """
     处理翻译任务的主函数
     
@@ -43,6 +44,7 @@ async def process_translation_task(task_id, paths, youtube_url, custom_prompt=""
         special_terms (str, optional): 特殊术语，逗号分隔
         content_name (str, optional): 内容名称
         language (str, optional): 目标语言
+        model (str, optional): 选择的模型
     """
     audio_file = None
     try:
@@ -84,17 +86,17 @@ async def process_translation_task(task_id, paths, youtube_url, custom_prompt=""
         tasks_store[task_id]["progress"] = 0.5
         numbered_sentences_chunks = extract_asr_sentences(srt_text)
         
-        # 7. 使用DeepSeek异步并行翻译英文字幕到中文
+        # 7. 使用LLM异步并行翻译英文字幕到中文,默认使用GPT-4.1 mini
         tasks_store[task_id]["progress"] = 0.6
         # 生成视频上下文信息
         full_custom_prompt = generate_custom_prompt(video_title, video_channel, custom_prompt)
-        llm_trans_result = await translate_with_deepseek_async(
-            numbered_sentences_chunks, 
-            full_custom_prompt, 
-            special_terms, 
+        llm_trans_result = await translate_subtitles(
+            numbered_sentences_chunks,
+            full_custom_prompt,
+            model,
+            special_terms,
             content_name
         )
-        
         
         # 8. 生成原始字幕的字典数据，给长句子匹配时间轴信息
         tasks_store[task_id]["progress"] = 0.7
@@ -139,7 +141,7 @@ async def process_translation_task(task_id, paths, youtube_url, custom_prompt=""
         cleanup_task_files(task_id)
 
 
-def create_translation_task(youtube_url, custom_prompt="", special_terms="", content_name="", language="zh-CN"):
+def create_translation_task(youtube_url, custom_prompt="", special_terms="", content_name="", language="zh-CN", model=None):
     """
     创建新的翻译任务
     
@@ -149,6 +151,7 @@ def create_translation_task(youtube_url, custom_prompt="", special_terms="", con
         special_terms (str, optional): 特殊术语，逗号分隔
         content_name (str, optional): 内容名称
         language (str, optional): 目标语言
+        model (str, optional): 选择的模型
         
     返回:
         str: 任务ID
@@ -185,7 +188,8 @@ def create_translation_task(youtube_url, custom_prompt="", special_terms="", con
             custom_prompt=custom_prompt,
             special_terms=special_terms,
             content_name=content_name,
-            language=language
+            language=language,
+            model=model
         )
     )
     

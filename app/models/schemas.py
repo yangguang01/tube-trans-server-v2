@@ -9,6 +9,7 @@ class TranslationRequest(BaseModel):
     special_terms: Optional[str] = ""
     content_name: Optional[str] = ""
     language: str = "zh-CN"
+    model: Optional[str] = None  # 新增
 
 
 class TaskResponse(BaseModel):
