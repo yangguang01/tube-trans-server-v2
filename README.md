@@ -95,3 +95,7 @@ curl "http://localhost:8000/api/subtitles/{task_id}" -o subtitle.srt
 1.增加模型选择功能
 2.支持openai GPT4.1 mini
 3.将分割功能使用openai GPT4.1 mini实现
+
+### 04/20 2.5版本更新
+
+1.使用新的ASR服务

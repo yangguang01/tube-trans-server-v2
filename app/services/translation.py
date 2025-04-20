@@ -13,8 +13,9 @@ import aiohttp
 from functools import wraps
 import openai
 import httpx
+import assemblyai as aai
 
-from app.core.config import REPLICATE_API_TOKEN, DEEPSEEK_API_KEY, RETRY_ATTEMPTS, BATCH_SIZE, MAX_CONCURRENT_TASKS, API_TIMEOUT, OPENAI_API_KEY
+from app.core.config import REPLICATE_API_TOKEN, DEEPSEEK_API_KEY, RETRY_ATTEMPTS, BATCH_SIZE, MAX_CONCURRENT_TASKS, API_TIMEOUT, OPENAI_API_KEY, ASSEMBLYAI_API_kEY
 from app.core.logging import logger
 from app.utils.file_utils import cleanup_audio_file
 
@@ -174,6 +175,88 @@ async def transcribe_audio(file_path):
     except Exception as e:
         logger.error(f"异步转写失败: {str(e)}", exc_info=True)
         raise
+
+async def transcribe_audio_with_assemblyai(file_path):
+    """
+    使用AssemblyAI转录音频文件，API密钥从环境变量获取
+    
+    参数:
+        audio_file_path (str, optional): 本地音频文件路径
+        audio_url (str, optional): 远程音频文件URL
+        env_key_name (str, optional): 存储API密钥的环境变量名称，默认为"ASSEMBLYAI_API_KEY"
+        
+    返回:
+        list: 转录的句子列表
+    """
+    
+    try:
+        logger.info(f"开始使用AssemblyAI 异步转写音频: {file_path}")
+        # 从环境变量获取API密钥
+        api_key = ASSEMBLYAI_API_kEY
+        if not api_key:
+            raise ValueError(f"未找到环境变量 请确保已设置API密钥")
+        
+        # 设置API密钥
+        aai.settings.api_key = api_key
+        
+        # 创建转录器对象
+        transcriber = aai.Transcriber()
+        
+        # 开始转录
+        with open(file_path, 'rb') as audio_file:
+            file_content = audio_file.read()
+            transcript = transcriber.transcribe(file_content)
+        
+        logger.info("异步音频转写完成")
+        # 获取转录的句子
+        return transcript.get_sentences()
+    
+    except Exception as e:
+        logger.error(f"异步转写失败: {str(e)}", exc_info=True)
+        raise
+
+def convert_AssemblyAI_to_srt(sentences):
+    """
+    AssemblyAI配套函数
+    将句子列表转换为SRT格式的字幕
+    
+    参数:
+        sentences: 包含text, start和end属性的句子对象列表
+    
+    返回:
+        SRT格式的字符串
+    """
+    srt_content = ""
+    
+    for i, sentence in enumerate(sentences, 1):
+        # 将毫秒转换为SRT时间格式 (HH:MM:SS,mmm)
+        start_time = format_time_AssemblyAI(sentence.start)
+        end_time = format_time_AssemblyAI(sentence.end)
+        
+        # 创建SRT条目
+        srt_content += f"{i}\n"
+        srt_content += f"{start_time} --> {end_time}\n"
+        srt_content += f"{sentence.text}\n\n"
+    
+    return srt_content.strip()
+
+def format_time_AssemblyAI(milliseconds):
+    """
+    将毫秒转换为SRT时间格式 (HH:MM:SS,mmm)
+    
+    参数:
+        milliseconds: 毫秒数
+    
+    返回:
+        格式化的时间字符串
+    """
+    # 转换为合适的单位
+    seconds, milliseconds = divmod(milliseconds, 1000)
+    minutes, seconds = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    
+    # 返回格式化的时间字符串
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d},{milliseconds:03d}"
 
 
 def format_time(seconds):

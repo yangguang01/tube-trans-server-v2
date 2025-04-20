@@ -24,7 +24,10 @@ from app.services.translation import (
     split_long_chinese_sentence_v4,
     generate_custom_prompt,
     get_video_info_and_download,
-    translate_subtitles
+    translate_subtitles,
+    transcribe_audio_with_assemblyai,
+    convert_AssemblyAI_to_srt
+
 )
 from app.core.config import SUBTITLES_DIR, TRANSCRIPTS_DIR, TMP_DIR, AUDIO_DIR
 
@@ -68,14 +71,19 @@ async def process_translation_task(task_id, paths, youtube_url, custom_prompt=""
         
         # 4. 转写音频
         tasks_store[task_id]["progress"] = 0.4
-        asr_result = await transcribe_audio(audio_file)
+        #asr_result = await transcribe_audio(audio_file)
+
+        # 250420更新，使用AssemblyAI转写音频
+        asr_result = await transcribe_audio_with_assemblyai(audio_file)
+
         
         # 保存转写结果
-        with open(paths["transcript"], "w", encoding="utf-8") as f:
-            json.dump(asr_result, f, ensure_ascii=False, indent=2)
+        # with open(paths["transcript"], "w", encoding="utf-8") as f:
+        #     json.dump(asr_result, f, ensure_ascii=False, indent=2)
         
         # 5. 生成SRT格式字幕
-        srt_text = json_to_srt(asr_result)
+        #srt_text = json_to_srt(asr_result)
+        srt_text = convert_AssemblyAI_to_srt(asr_result)
         
         # 保存英文SRT字幕
         with open(paths["transcript_srt"], "w", encoding="utf-8") as f:

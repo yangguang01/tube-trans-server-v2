@@ -9,3 +9,4 @@ tenacity>=9.0.0
 aiohttp>=3.11.13
 nest-asyncio>=1.6.0
 pydantic>=2.10.6 
+assemblyai
