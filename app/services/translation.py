@@ -15,7 +15,7 @@ import openai
 import httpx
 import assemblyai as aai
 
-from app.core.config import REPLICATE_API_TOKEN, DEEPSEEK_API_KEY, RETRY_ATTEMPTS, BATCH_SIZE, MAX_CONCURRENT_TASKS, API_TIMEOUT, OPENAI_API_KEY, ASSEMBLYAI_API_kEY
+from app.core.config import REPLICATE_API_TOKEN, DEEPSEEK_API_KEY, RETRY_ATTEMPTS, BATCH_SIZE, MAX_CONCURRENT_TASKS, API_TIMEOUT, OPENAI_API_KEY, ASSEMBLYAI_API_KEY,PROXY_URL
 from app.core.logging import logger
 from app.utils.file_utils import cleanup_audio_file
 
@@ -95,41 +95,91 @@ def get_video_info(url):
         raise
 
 # 250403更新：新增get_video_info_and_download函数，同时获取信息并下载音频
-def get_video_info_and_download(url, file_path):
+# def get_video_info_and_download(url, file_path):
+#     """
+#     获取YouTube视频信息
+
+#     参数:
+#         url (str): YouTube URL
+
+#     返回:
+#         dict: 视频信息字典
+#     """
+#     logger.info("任务开始! 音频下载中...")
+#     ydl_opts = {
+#         'quiet': True,
+#         'no_warnings': True,
+#         'format': 'bestaudio[ext=webm]',
+#         'outtmpl': str(file_path),
+#         'http_headers': {
+#             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+#         },
+#         'force_ipv4': True,
+#         'proxy': 'socks5://8t4v58911-region-US-sid-JaboGcGm-t-5:wl34yfx7@us2.cliproxy.io:443',
+#     }
+#     print(file_path)
+#     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+#         info = ydl.extract_info(url, download=True)
+
+#     # 确保返回的信息中包含视频ID
+#     video_data = {
+#         'title': info.get('title', 'Unknown'),
+#         'id': info.get('id', ''),  # 提取视频ID
+#         'channel': info.get('channel', 'Unknown'),
+#         'duration': info.get('duration', 0),
+#         # 其他需要的信息...
+#     }
+
+#     return video_data
+
+# 250506更新：将下载改为异步函数
+async def get_video_info_and_download(url, file_path):
     """
-    获取YouTube视频信息
+    异步获取YouTube视频信息并下载
 
     参数:
         url (str): YouTube URL
+        file_path (str/Path): 目标文件路径
 
     返回:
         dict: 视频信息字典
     """
     logger.info("任务开始! 音频下载中...")
-    ydl_opts = {
-        'quiet': True,
-        'no_warnings': True,
-        'format': 'bestaudio[ext=webm]',
-        'outtmpl': str(file_path),
-        'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        },
-        'force_ipv4': True,
-        'proxy': 'socks5://8t4v58911-region-US-sid-JaboGcGm-t-5:wl34yfx7@us2.cliproxy.io:443',
-    }
-    print(file_path)
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=True)
+    
+    # 定义一个同步函数用于在线程中执行
+    def download_video():
+        ydl_opts = {
+            'quiet': True,
+            'no_warnings': True,
+            'format': 'bestaudio[ext=webm]',
+            'outtmpl': str(file_path),
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            },
+            'force_ipv4': True,
+            #'proxy': 'socks5://8t4v58911-region-US-sid-JaboGcGm-t-5:wl34yfx7@us2.cliproxy.io:443',
+        }
+        if PROXY_URL:
+            ydl_opts['proxy'] = PROXY_URL
 
-    # 确保返回的信息中包含视频ID
+        print(file_path)
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+        return info
+    
+    # 使用asyncio.to_thread在单独的线程中执行下载操作
+    logger.info("开始在单独的线程中执行下载操作...")
+    info = await asyncio.to_thread(download_video)
+    
+    # 处理并返回视频信息
     video_data = {
         'title': info.get('title', 'Unknown'),
         'id': info.get('id', ''),  # 提取视频ID
-        'channel': info.get('channel', 'Unknown'),
+        'channel': info.get('channel', 'Unknown'), 
         'duration': info.get('duration', 0),
         # 其他需要的信息...
     }
-
+    
     return video_data
 
 
@@ -192,7 +242,7 @@ async def transcribe_audio_with_assemblyai(file_path):
     try:
         logger.info(f"开始使用AssemblyAI 异步转写音频: {file_path}")
         # 从环境变量获取API密钥
-        api_key = ASSEMBLYAI_API_kEY
+        api_key = ASSEMBLYAI_API_KEY
         if not api_key:
             raise ValueError(f"未找到环境变量 请确保已设置API密钥")
         
@@ -886,146 +936,146 @@ async def process_audio(audio_path, output_dir, content_name, custom_prompt="", 
         raise 
 
 
-async def split_long_chinese_sentence_v3(chinese_timeranges_dict, model='deepseek-chat'):
-    '''
-    v3版本，先把中文句子按照空格进行分割，然后再对超过40个字的长句子进行分割
-    '''
-    # 先按照空格分割
-    space_split_subtitles = {}
-    space_split_index = 1
+#async def split_long_chinese_sentence_v3(chinese_timeranges_dict, model='deepseek-chat'):
+#     '''
+#     v3版本，先把中文句子按照空格进行分割，然后再对超过40个字的长句子进行分割
+#     '''
+#     # 先按照空格分割
+#     space_split_subtitles = {}
+#     space_split_index = 1
 
-    for index, (time_range, text) in chinese_timeranges_dict.items():
-        start_time, end_time = time_range.split(' --> ')
-        # 使用正则表达式分割中文句子之间的空格
-        parts = re.split(r'(?<=[\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff])', text)
-        num_parts = len(parts)
-        total_length = sum(len(part) for part in parts)
+#     for index, (time_range, text) in chinese_timeranges_dict.items():
+#         start_time, end_time = time_range.split(' --> ')
+#         # 使用正则表达式分割中文句子之间的空格
+#         parts = re.split(r'(?<=[\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff])', text)
+#         num_parts = len(parts)
+#         total_length = sum(len(part) for part in parts)
 
-        if num_parts > 1:
-            start_time = parse_time(start_time)
-            end_time = parse_time(end_time)
-            word_per_duration = (end_time - start_time)/total_length
-            current_start_time = start_time
+#         if num_parts > 1:
+#             start_time = parse_time(start_time)
+#             end_time = parse_time(end_time)
+#             word_per_duration = (end_time - start_time)/total_length
+#             current_start_time = start_time
 
-            for i, part in enumerate(parts):
-                current_end_time = current_start_time + word_per_duration * len(part)
-                space_split_subtitles[space_split_index] = (f"{time_to_str(current_start_time)} --> {time_to_str(current_end_time)}", part)
-                current_start_time = current_end_time
-                space_split_index += 1
-        else:
-            space_split_subtitles[space_split_index] = (time_range, text)
-            space_split_index += 1
+#             for i, part in enumerate(parts):
+#                 current_end_time = current_start_time + word_per_duration * len(part)
+#                 space_split_subtitles[space_split_index] = (f"{time_to_str(current_start_time)} --> {time_to_str(current_end_time)}", part)
+#                 current_start_time = current_end_time
+#                 space_split_index += 1
+#         else:
+#             space_split_subtitles[space_split_index] = (time_range, text)
+#             space_split_index += 1
 
-    # 复制字典
-    split_subtitles_dict = space_split_subtitles.copy()
+#     # 复制字典
+#     split_subtitles_dict = space_split_subtitles.copy()
 
-    # 找出中文字幕中的长字幕
-    threshold = 40
-    long_subtitles = []
-    for key, (timeranges, subtitles) in space_split_subtitles.items():
-        if len(subtitles) > threshold:
-            long_subtitles.append((key, timeranges, subtitles))
+#     # 找出中文字幕中的长字幕
+#     threshold = 40
+#     long_subtitles = []
+#     for key, (timeranges, subtitles) in space_split_subtitles.items():
+#         if len(subtitles) > threshold:
+#             long_subtitles.append((key, timeranges, subtitles))
 
-    # 对长字幕开始进行优化
-    # 循环控制
-    for key, timeranges, subtitles in long_subtitles:
-        # 在循环中提取时间范围
-        start_str, end_str = timeranges.split(' --> ')
-        start_time = parse_time(start_str)
-        end_time = parse_time(end_str)
+#     # 对长字幕开始进行优化
+#     # 循环控制
+#     for key, timeranges, subtitles in long_subtitles:
+#         # 在循环中提取时间范围
+#         start_str, end_str = timeranges.split(' --> ')
+#         start_time = parse_time(start_str)
+#         end_time = parse_time(end_str)
 
-        # 在循环中调用api分割句子
-        # api调用，返回api_return_content
-        split_prompt_v2 = f'''
-        Split the long Chinese sentences below, delimited by triple backtick
-        - Only split long sentences, do not alter the content of the sentences
-        - According to your understanding of the sentence, divide the long sentence into several short sentences that are easiest to understand.
-        - When splitting, please keep the "linguistic integrity" together.
-        - Each short sentence should not exceed 20 Chinese characters as much as possible.
+#         # 在循环中调用api分割句子
+#         # api调用，返回api_return_content
+#         split_prompt_v2 = f'''
+#         Split the long Chinese sentences below, delimited by triple backtick
+#         - Only split long sentences, do not alter the content of the sentences
+#         - According to your understanding of the sentence, divide the long sentence into several short sentences that are easiest to understand.
+#         - When splitting, please keep the "linguistic integrity" together.
+#         - Each short sentence should not exceed 20 Chinese characters as much as possible.
 
-        Provide your translation in json structure like this:{{
-              '1':'<Segmented short sentences 1>',
-              '2':'<Segmented short sentences 2>',
-              }}
-        long Chinese sentences below: ```{subtitles}```
-        '''
+#         Provide your translation in json structure like this:{{
+#               '1':'<Segmented short sentences 1>',
+#               '2':'<Segmented short sentences 2>',
+#               }}
+#         long Chinese sentences below: ```{subtitles}```
+#         '''
         
-        logger.info(f"对长句子进行分割: {subtitles}")
+#         logger.info(f"对长句子进行分割: {subtitles}")
         
-        client = AsyncOpenAI(
-            api_key=DEEPSEEK_API_KEY, 
-            base_url="https://api.deepseek.com",
-            timeout=float(API_TIMEOUT)
-        )
+#         client = AsyncOpenAI(
+#             api_key=DEEPSEEK_API_KEY, 
+#             base_url="https://api.deepseek.com",
+#             timeout=float(API_TIMEOUT)
+#         )
         
-        messages = [
-            {"role": "user", "content": split_prompt_v2},
-        ]
+#         messages = [
+#             {"role": "user", "content": split_prompt_v2},
+#         ]
         
-        # 调用API分割长句子
-        try:
-            response = await client.chat.completions.create(
-                model=model,
-                response_format={'type': "json_object"},
-                messages=messages,
-                temperature=0,
-                top_p=1,
-                frequency_penalty=0,
-                presence_penalty=0,
-            )
-            api_return_content = response.choices[0].message.content
+#         # 调用API分割长句子
+#         try:
+#             response = await client.chat.completions.create(
+#                 model=model,
+#                 response_format={'type': "json_object"},
+#                 messages=messages,
+#                 temperature=0,
+#                 top_p=1,
+#                 frequency_penalty=0,
+#                 presence_penalty=0,
+#             )
+#             api_return_content = response.choices[0].message.content
             
-            # 处理api返回的json结果，转为字典
-            api_return_content_todict = json.loads(api_return_content)
-            all_text = ''.join(api_return_content_todict.values())
+#             # 处理api返回的json结果，转为字典
+#             api_return_content_todict = json.loads(api_return_content)
+#             all_text = ''.join(api_return_content_todict.values())
             
-            # 在循环中完成短句的时间轴计算和匹配
-            # 新建一个列表用来存储分割后的字幕信息
-            split_subtitles = []
-            # 计算总时长
-            duration = (end_time - start_time).total_seconds()
-            # 用返回的句子来计算每个字符的持续时间
-            word_duration = duration / len(all_text)
-            # 起始时间
-            current_start_time = start_time
-            # 为分割后的每个字幕生成时间轴
-            short_subtitle_list = list(api_return_content_todict.values())
-            for short_subtitle in short_subtitle_list:
-                # 计算时间轴信息
-                short_subtitle_duration = len(short_subtitle) * word_duration
-                current_end_time = current_start_time + timedelta(seconds=short_subtitle_duration)
-                # 存储分割后字幕的时间轴
-                short_subtitle_time_range = f'{time_to_str(current_start_time)} --> {time_to_str(current_end_time)}'
-                split_subtitles.append((short_subtitle_time_range, short_subtitle))
-                # 更新初始时间
-                current_start_time = current_end_time
+#             # 在循环中完成短句的时间轴计算和匹配
+#             # 新建一个列表用来存储分割后的字幕信息
+#             split_subtitles = []
+#             # 计算总时长
+#             duration = (end_time - start_time).total_seconds()
+#             # 用返回的句子来计算每个字符的持续时间
+#             word_duration = duration / len(all_text)
+#             # 起始时间
+#             current_start_time = start_time
+#             # 为分割后的每个字幕生成时间轴
+#             short_subtitle_list = list(api_return_content_todict.values())
+#             for short_subtitle in short_subtitle_list:
+#                 # 计算时间轴信息
+#                 short_subtitle_duration = len(short_subtitle) * word_duration
+#                 current_end_time = current_start_time + timedelta(seconds=short_subtitle_duration)
+#                 # 存储分割后字幕的时间轴
+#                 short_subtitle_time_range = f'{time_to_str(current_start_time)} --> {time_to_str(current_end_time)}'
+#                 split_subtitles.append((short_subtitle_time_range, short_subtitle))
+#                 # 更新初始时间
+#                 current_start_time = current_end_time
             
-            # 在循环中更新split_subtitles_dict字典
-            split_subtitles_dict[key] = split_subtitles
+#             # 在循环中更新split_subtitles_dict字典
+#             split_subtitles_dict[key] = split_subtitles
             
-        except Exception as e:
-            logger.error(f"长句分割失败: {str(e)}", exc_info=True)
-            # 如果分割失败，保留原始句子
-            split_subtitles_dict[key] = [(timeranges, subtitles)]
+#         except Exception as e:
+#             logger.error(f"长句分割失败: {str(e)}", exc_info=True)
+#             # 如果分割失败，保留原始句子
+#             split_subtitles_dict[key] = [(timeranges, subtitles)]
 
-    logger.info(f'使用的模型：{model}')
+#     logger.info(f'使用的模型：{model}')
     
-    # 处理最终的字典结构，使其符合预期的格式
-    final_dict = {}
-    current_index = 1
+#     # 处理最终的字典结构，使其符合预期的格式
+#     final_dict = {}
+#     current_index = 1
     
-    for key, value in split_subtitles_dict.items():
-        if isinstance(value, list):  # 处理被分割的字幕
-            for time_range, text in value:
-                final_dict[current_index] = (time_range, text)
-                current_index += 1
-        else:  # 处理未被分割的字幕
-            time_range, text = value
-            final_dict[current_index] = (time_range, text)
-            current_index += 1
+#     for key, value in split_subtitles_dict.items():
+#         if isinstance(value, list):  # 处理被分割的字幕
+#             for time_range, text in value:
+#                 final_dict[current_index] = (time_range, text)
+#                 current_index += 1
+#         else:  # 处理未被分割的字幕
+#             time_range, text = value
+#             final_dict[current_index] = (time_range, text)
+#             current_index += 1
     
-    logger.info(f"长句子拆分完成：原始{len(chinese_timeranges_dict)}个条目，拆分后{len(final_dict)}个条目")
-    return final_dict 
+#     logger.info(f"长句子拆分完成：原始{len(chinese_timeranges_dict)}个条目，拆分后{len(final_dict)}个条目")
+#     return final_dict 
 
 # 250403更新
 # 全新的长句分割方法。对于无法按照规则分割的句子，调用异步LLM分割
@@ -1054,7 +1104,7 @@ def parse_time_range(time_range_str):
 def split_sentence(text):
     """
     对输入的中文句子进行分割：
-    1. 只有长度大于25个字符的句子才进行分割（正好25个字符的不处理）；
+    1. 只有长度大于20个字符的句子才进行分割（正好20个字符的不处理）；
     2. 以空格为分割标志，但仅当空格两边都是中文字符时进行分割；
     3. 分割后每一部分必须至少有5个字符（允许恰好5个字符）；
     4. 对长句子采用递归方式处理所有符合条件的分割点。
@@ -1062,15 +1112,17 @@ def split_sentence(text):
     if len(text) <= 20:
         return [text]
 
-    pattern = re.compile(
-    r'(?<=[\u4e00-\u9fff])\s+(?=[A-Za-z0-9\u4e00-\u9fff])'
-    r'|(?<=[A-Za-z0-9])\s+(?=[\u4e00-\u9fff])')
+    # pattern = re.compile(
+    # r'(?<=[\u4e00-\u9fff])\s+(?=[A-Za-z0-9\u4e00-\u9fff])'
+    # r'|(?<=[A-Za-z0-9])\s+(?=[\u4e00-\u9fff])')
+    #250506 修改分割规则，只分割中文字符之间的空格
+    pattern = re.compile(r'(?<=[\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff])')
     matches = list(pattern.finditer(text))
 
     for match in matches:
         left = text[:match.start()]
         right = text[match.end():]
-        if len(left) >= 5 and len(right) >= 5:
+        if len(left) >= 6 and len(right) >= 6:
             return [left] + split_sentence(right)
 
     return [text]
@@ -1622,3 +1674,102 @@ def get_system_prompt_for_model(model):
           }}
           ```
         """
+
+# 0505更新 将title和channel name传给LLM，推断视频上下文信息。
+@async_retry()
+async def get_video_context_from_llm(title, channel_name):
+    """
+    让LLM通过title 和 channel name 推断视频上下文信息
+    """
+    try:
+        logger.info("开始执行get_video_context_from_llm...")
+
+        client = AsyncOpenAI(
+            api_key=OPENAI_API_KEY,
+            timeout=API_TIMEOUT
+        )
+
+        messages=[
+                    {"role": "system", "content": "步骤1：判断该channel是否是在你的知识库中。如果你了解该channel的相关信息，输出它的相关信息\n例如：channel name ： 3Blue1Brown\n这个频道以动画可视化数学原理闻名\n要求：仔细检查你的知识库，如果你不知道这个channel则诚实的说不知道，不要编造信息。\n\n步骤2：结合video title和步骤1的信息，输出你对视频内容的推断。然后简要描述针对这个视频，该采取什么样的翻译策略。\n要求：如果无法从title和channel name中推断视频内容，请诚实的说不知道，不要编造信息。\n\n步骤3：综合步骤1、2，以第一人称的口吻给出简要的3个翻译策略或注意事项。\n\t1.\t明确本次翻译应采用的话语风格（如：正式、学术、轻松、幽默等），风格应贴合视频内容和目标观众；\n\t2.\t识别该视频中可能包含的专业领域术语，简要列举 2-3 个代表性术语，并指出它们在翻译中应保持准确性或采用贴近母语习惯的表达；\n\t3.\t可补充其他翻译技巧，但不得包含模板化建议，如“术语首次出现时进行注释或举例说明”这类通用表述应避免使用。\n要求：如果无法从步骤1、2推断视频内容，请诚实的说不知道，不要编造信息。\n\n使用中文输出所有内容\n使用如下json格式进行输出\n{\n\"step1\": {\n\"channel_name\": \"string\",\n\"channel_info\": \"string or null\",\n\"can_judge\": true\n},\n\"step2\": {\n\"video_title\": \"string\",\n\"content_inference\": \"string or null\",\n\"can_judge\": true\n},\n\"step3\": {\n\"translation_strategies\": [\n\"string or null\",\n\"string or null\",\n\"special_terms_strategies\"\n],\n\"can_judge\": true\n}"},
+                    {"role": "user", "content": f"channel name: {channel_name}\nvideo title: {title}"}
+                ]
+
+        response = await client.chat.completions.create(
+            model="gpt-4.1",
+            response_format={'type': "json_object"},
+            messages=messages,
+            temperature=1,
+            top_p=0.7  
+        )
+
+        result = response.choices[0].message.content
+
+
+        # 检查响应结构
+        if not hasattr(response, 'choices') or len(response.choices) == 0:
+            logger.error("API响应缺少choices字段")
+            raise ValueError("无效的API响应结构")
+
+        message = response.choices[0].message
+        if not hasattr(message, 'content'):
+            logger.error("API响应缺少content字段")
+            raise ValueError("响应中缺少翻译内容")
+
+        # 预验证JSON格式
+        try:
+            json.loads(message.content)
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON预验证失败: {message.content[:100]}...")
+            raise
+
+        return result
+
+    except openai.APIConnectionError as e:
+        logger.error(f"API连接错误: {str(e)}")
+        raise
+    except openai.APITimeoutError as e:
+        logger.error(f"API超时错误: {str(e)}")
+        raise
+    except openai.RateLimitError as e:
+        logger.error(f"API速率限制错误: {str(e)}")
+        raise
+    except Exception as e:
+        logger.error(f"异步API调用失败: {str(e)}")
+        raise
+
+
+def process_video_context_data(json_data):
+    # 处理 get_video_context_from_llm 的输出
+    if isinstance(json_data, str):
+        data = json.loads(json_data)
+    else:
+        data = json_data
+    
+    # 任务1: 提取can_judge为true的字段，转为纯文本
+    text_output = []
+    
+    # 遍历每个step
+    for step_key, step_value in data.items():
+        # 检查是否包含can_judge且为true
+        if step_value.get("can_judge", False) == True:
+            # 提取不同类型的字段
+            if "channel_info" in step_value:
+                text_output.append(step_value["channel_info"])
+            if "content_inference" in step_value:
+                text_output.append(step_value["content_inference"])
+            if "translation_strategies" in step_value and isinstance(step_value["translation_strategies"], list):
+                for strategy in step_value["translation_strategies"]:
+                    text_output.append(strategy)
+    
+    # 将文本列表转换为换行分隔的字符串
+    formatted_text = "\n".join(text_output)
+    
+    # 任务2: 提取step3中的translation_strategies
+    translation_strategies = {}
+    if "step3" in data and "translation_strategies" in data["step3"]:
+        translation_strategies = {
+            "translation_strategies": data["step3"]["translation_strategies"]
+        }
+    
+    # 直接返回两个独立的变量，而不是字典
+    return formatted_text, translation_strategies

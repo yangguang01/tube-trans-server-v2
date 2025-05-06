@@ -10,6 +10,7 @@ class TranslationRequest(BaseModel):
     content_name: Optional[str] = ""
     language: str = "zh-CN"
     model: Optional[str] = None  # 新增
+    channel_name: Optional[str] = ""
 
 
 class TaskResponse(BaseModel):
@@ -24,4 +25,9 @@ class TaskStatus(BaseModel):
     progress: Optional[float] = None
     result_url: Optional[str] = None
     error: Optional[str] = None
-    video_title: Optional[str] = None 
+    video_title: Optional[str] = None
+
+
+class TranslationStrategiesResponse(BaseModel):
+    """翻译策略响应模型"""
+    strategies: Optional[Dict[str, Any]] = None 

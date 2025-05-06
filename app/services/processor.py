@@ -26,7 +26,9 @@ from app.services.translation import (
     get_video_info_and_download,
     translate_subtitles,
     transcribe_audio_with_assemblyai,
-    convert_AssemblyAI_to_srt
+    convert_AssemblyAI_to_srt,
+    get_video_context_from_llm,
+    process_video_context_data
 
 )
 from app.core.config import SUBTITLES_DIR, TRANSCRIPTS_DIR, TMP_DIR, AUDIO_DIR
@@ -36,7 +38,7 @@ from app.core.config import SUBTITLES_DIR, TRANSCRIPTS_DIR, TMP_DIR, AUDIO_DIR
 tasks_store = {}
 
 
-async def process_translation_task(task_id, paths, youtube_url, custom_prompt="", special_terms="", content_name="", language="zh-CN", model=None):
+async def process_translation_task(task_id, paths, youtube_url, custom_prompt="", special_terms="", content_name="", channel_name="", language="zh-CN", model=None):
     """
     处理翻译任务的主函数
     
@@ -53,22 +55,29 @@ async def process_translation_task(task_id, paths, youtube_url, custom_prompt=""
     try:
         # 更新任务状态为处理中
         tasks_store[task_id]["status"] = "processing"
-        
-        # 1. 获取视频信息
+
+        # 1.开始下载音频并获取视频上下文信息
+        llm_context_task = asyncio.create_task(get_video_context_from_llm(content_name, channel_name))
+        download_task = asyncio.create_task(get_video_info_and_download(youtube_url, paths["audio"]))
+
+        # 2.等待视频上下文信息生成
         tasks_store[task_id]["progress"] = 0.1
-        video_info = get_video_info_and_download(youtube_url, paths["audio"])
-        video_title = video_info.get('title', task_id)
+        video_context_data = await llm_context_task
+        video_context_prompt, trans_strategies = process_video_context_data(video_context_data)
+        tasks_store[task_id]["trans_strategies"] = trans_strategies
+        tasks_store[task_id]["status"] = "strategies_ready"
+
+        # 3. 等待下载完成
+        tasks_store[task_id]["progress"] = 0.2
+        video_info = await download_task
+        #video_title = video_info.get('title', task_id)
         video_id = video_info.get('id', task_id)
         video_channel = video_info.get('channel', task_id)
-        tasks_store[task_id]["video_title"] = video_title
+        tasks_store[task_id]["video_title"] = content_name
         tasks_store[task_id]["video_id"] = video_id
-        
-        # 2. 更新进度状态
-        tasks_store[task_id]["progress"] = 0.2
-        
-        # 3. 获取音频文件路径
         audio_file = paths["audio"]
-        
+
+                
         # 4. 转写音频
         tasks_store[task_id]["progress"] = 0.4
         #asr_result = await transcribe_audio(audio_file)
@@ -97,10 +106,10 @@ async def process_translation_task(task_id, paths, youtube_url, custom_prompt=""
         # 7. 使用LLM异步并行翻译英文字幕到中文,默认使用GPT-4.1 mini
         tasks_store[task_id]["progress"] = 0.6
         # 生成视频上下文信息
-        full_custom_prompt = generate_custom_prompt(video_title, video_channel, custom_prompt)
+        #full_custom_prompt = generate_custom_prompt(video_title, video_channel, custom_prompt)
         llm_trans_result = await translate_subtitles(
             numbered_sentences_chunks,
-            full_custom_prompt,
+            video_context_prompt,
             model,
             special_terms,
             content_name
@@ -149,7 +158,7 @@ async def process_translation_task(task_id, paths, youtube_url, custom_prompt=""
         cleanup_task_files(task_id)
 
 
-def create_translation_task(youtube_url, custom_prompt="", special_terms="", content_name="", language="zh-CN", model=None):
+def create_translation_task(youtube_url, custom_prompt="", special_terms="", content_name="", channel_name="", language="zh-CN", model=None):
     """
     创建新的翻译任务
     
@@ -196,6 +205,7 @@ def create_translation_task(youtube_url, custom_prompt="", special_terms="", con
             custom_prompt=custom_prompt,
             special_terms=special_terms,
             content_name=content_name,
+            channel_name=channel_name,
             language=language,
             model=model
         )
@@ -217,4 +227,20 @@ def get_task_status(task_id):
     if task_id not in tasks_store:
         return None
     
-    return tasks_store[task_id] 
+    return tasks_store[task_id]
+
+
+def get_task_translation_strategies(task_id):
+    """
+    获取任务的翻译策略
+    
+    参数:
+        task_id (str): 任务ID
+        
+    返回:
+        dict: 任务的翻译策略，如果任务不存在或尚未生成策略则返回None
+    """
+    if task_id not in tasks_store:
+        return None
+    
+    return tasks_store[task_id].get("trans_strategies") 

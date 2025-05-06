@@ -90,6 +90,12 @@ curl "http://localhost:8000/api/subtitles/{task_id}" -o subtitle.srt
 
 ## 更新
 
+### 05/06 2.6版本更新
+1.新增AI翻译策略相关代码
+2.代理地址配置化
+3.优化句子分割方式
+4.下载改为异步
+
 ### 04/17 2.4版本更新
 
 1.增加模型选择功能
@@ -98,4 +104,4 @@ curl "http://localhost:8000/api/subtitles/{task_id}" -o subtitle.srt
 
 ### 04/20 2.5版本更新
 
-1.使用新的ASR服务
+1.使用新的ASR服务 

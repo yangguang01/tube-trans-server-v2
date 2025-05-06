@@ -24,8 +24,8 @@ DEBUG = os.getenv("DEBUG", "False").lower() in ("true", "1")
 REPLICATE_API_TOKEN = os.getenv("REPLICATE_API_TOKEN", "")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
-ASSEMBLYAI_API_kEY = os.getenv("ASSEMBLYAI_API_kEY","")
-
+ASSEMBLYAI_API_KEY = os.getenv("ASSEMBLYAI_API_kEY","")
+PROXY_URL = os.getenv("PROXY_URL", "")
 
 # API超时配置
 API_TIMEOUT = int(os.getenv("API_TIMEOUT", "1200"))  # 默认120秒

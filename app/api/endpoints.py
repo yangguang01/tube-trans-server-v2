@@ -2,8 +2,8 @@ from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
 from fastapi.responses import FileResponse
 from pathlib import Path
 
-from app.models.schemas import TranslationRequest, TaskResponse, TaskStatus
-from app.services.processor import create_translation_task, get_task_status
+from app.models.schemas import TranslationRequest, TaskResponse, TaskStatus, TranslationStrategiesResponse
+from app.services.processor import create_translation_task, get_task_status, get_task_translation_strategies
 from app.core.config import SUBTITLES_DIR
 
 from app.core.logging import logger
@@ -28,6 +28,7 @@ async def translate_video(request: TranslationRequest):
         custom_prompt=request.custom_prompt,
         special_terms=request.special_terms,
         content_name=request.content_name,
+        channel_name=request.channel_name,
         language=request.language,
         model=request.model
     )
@@ -102,4 +103,22 @@ async def health_check():
     返回:
         dict: 状态信息
     """
-    return {"status": "ok", "version": "0.1.0"} 
+    return {"status": "ok", "version": "0.1.0"}
+
+
+@router.get("/tasks/{task_id}/strategies", response_model=TranslationStrategiesResponse)
+async def get_translation_strategies(task_id: str):
+    """
+    获取任务的翻译策略
+    
+    参数:
+        task_id (str): 任务ID
+        
+    返回:
+        TranslationStrategiesResponse: 包含翻译策略的响应体
+    """
+    strategies = get_task_translation_strategies(task_id)
+    if strategies is None:
+        raise HTTPException(status_code=404, detail="Task not found or strategies not yet generated")
+    
+    return {"strategies": strategies} 
