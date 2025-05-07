@@ -121,4 +121,4 @@ async def get_translation_strategies(task_id: str):
     if strategies is None:
         raise HTTPException(status_code=404, detail="Task not found or strategies not yet generated")
     
-    return {"strategies": strategies} 
+    return {"translation_strategies": strategies} 

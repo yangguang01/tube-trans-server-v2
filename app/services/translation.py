@@ -1765,11 +1765,10 @@ def process_video_context_data(json_data):
     formatted_text = "\n".join(text_output)
     
     # 任务2: 提取step3中的translation_strategies
-    translation_strategies = {}
+    # 直接返回策略列表，避免不必要的嵌套
+    translation_strategies = []
     if "step3" in data and "translation_strategies" in data["step3"]:
-        translation_strategies = {
-            "translation_strategies": data["step3"]["translation_strategies"]
-        }
+        translation_strategies = data["step3"]["translation_strategies"]
     
     # 直接返回两个独立的变量，而不是字典
     return formatted_text, translation_strategies
