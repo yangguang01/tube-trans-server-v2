@@ -9,7 +9,7 @@ class TranslationRequest(BaseModel):
     special_terms: Optional[str] = ""
     content_name: Optional[str] = ""
     language: str = "zh-CN"
-    model: Optional[str] = None  # 新增
+    model: Optional[str] = "gpt"  # 新增
     channel_name: Optional[str] = ""
 
 
