@@ -132,22 +132,9 @@ def get_video_info(url):
 
 #     return video_data
 
-# 250506更新：将下载改为异步函数
-async def get_video_info_and_download(url, file_path):
-    """
-    异步获取YouTube视频信息并下载
 
-    参数:
-        url (str): YouTube URL
-        file_path (str/Path): 目标文件路径
-
-    返回:
-        dict: 视频信息字典
-    """
-    logger.info("任务开始! 音频下载中...")
-    
-    # 定义一个同步函数用于在线程中执行
-    def download_video():
+def get_video_info_and_download(url, file_path):
+        logger.info("任务开始! 音频下载中...")
         ydl_opts = {
             'quiet': True,
             'no_warnings': True,
@@ -161,26 +148,23 @@ async def get_video_info_and_download(url, file_path):
         }
         if PROXY_URL:
             ydl_opts['proxy'] = PROXY_URL
+            logger.info(f"使用代理: {PROXY_URL}")
 
         print(file_path)
+        logger.info(f"开始下载视频: {url}")
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
-        return info
-    
-    # 使用asyncio.to_thread在单独的线程中执行下载操作
-    logger.info("开始在单独的线程中执行下载操作...")
-    info = await asyncio.to_thread(download_video)
-    
-    # 处理并返回视频信息
-    video_data = {
-        'title': info.get('title', 'Unknown'),
-        'id': info.get('id', ''),  # 提取视频ID
-        'channel': info.get('channel', 'Unknown'), 
-        'duration': info.get('duration', 0),
-        # 其他需要的信息...
-    }
-    
-    return video_data
+        
+        # 处理并返回视频信息
+        video_data = {
+            'title': info.get('title', 'Unknown'),
+            'id': info.get('id', ''),  # 提取视频ID
+            'channel': info.get('channel', 'Unknown'), 
+            'duration': info.get('duration', 0),
+            # 其他需要的信息...
+        }
+        logger.info(f"视频下载完成: {file_path}")
+        return video_data
 
 
 async def transcribe_audio(file_path):
