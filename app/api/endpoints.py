@@ -117,8 +117,7 @@ async def get_translation_strategies(task_id: str):
     返回:
         TranslationStrategiesResponse: 包含翻译策略的响应体
     """
-    # strategies = get_task_translation_strategies(task_id)
-    # if strategies is None:
-    #     raise HTTPException(status_code=404, detail="Task not found or strategies not yet generated")
-    
-    return get_task_translation_strategies(task_id)
+    result = get_task_translation_strategies(task_id)
+    if result is None:
+        raise HTTPException(404, "Task not found or strategies not yet generated")
+    return result

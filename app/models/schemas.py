@@ -1,5 +1,5 @@
 from pydantic import BaseModel, HttpUrl
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 
 class TranslationRequest(BaseModel):
@@ -30,4 +30,4 @@ class TaskStatus(BaseModel):
 
 class TranslationStrategiesResponse(BaseModel):
     """翻译策略响应模型"""
-    strategies: Optional[Dict[str, Any]] = None 
+    strategies: Optional[List[str]] = None 

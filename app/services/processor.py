@@ -247,4 +247,4 @@ def get_task_translation_strategies(task_id):
     strategies = tasks_store[task_id].get("trans_strategies", [])
     logger.info(f"翻译策略的原始数据: {strategies}")
 
-    return {"translation_strategies": strategies} 
+    return {"strategies": strategies} 
