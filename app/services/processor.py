@@ -67,6 +67,9 @@ async def process_translation_task(task_id, paths, youtube_url, custom_prompt=""
         tasks_store[task_id]["trans_strategies"] = trans_strategies
         tasks_store[task_id]["status"] = "strategies_ready"
 
+        logger.info(f"视频上下文信息: {video_context_prompt}")
+        logger.info(f"翻译策略: {trans_strategies}")
+
         # 3. 等待下载完成
         tasks_store[task_id]["progress"] = 0.2
         video_info = await download_task

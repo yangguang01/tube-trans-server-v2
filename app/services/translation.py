@@ -1704,6 +1704,8 @@ async def get_video_context_from_llm(title, channel_name):
 
         result = response.choices[0].message.content
 
+        logger.info(f"get_video_context_from_llm 结果: {result}")
+
 
         # 检查响应结构
         if not hasattr(response, 'choices') or len(response.choices) == 0:
@@ -1763,12 +1765,13 @@ def process_video_context_data(json_data):
     
     # 将文本列表转换为换行分隔的字符串
     formatted_text = "\n".join(text_output)
-    
+    logger.info(f"process_video_context_data 任务1结果: {formatted_text}")
     # 任务2: 提取step3中的translation_strategies
     # 直接返回策略列表，避免不必要的嵌套
     translation_strategies = []
     if "step3" in data and "translation_strategies" in data["step3"]:
         translation_strategies = data["step3"]["translation_strategies"]
+    logger.info(f"process_video_context_data 任务2结果: {translation_strategies}")
     
     # 直接返回两个独立的变量，而不是字典
     return formatted_text, translation_strategies
