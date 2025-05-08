@@ -28,7 +28,8 @@ from app.services.translation import (
     transcribe_audio_with_assemblyai,
     convert_AssemblyAI_to_srt,
     get_video_context_from_llm,
-    process_video_context_data
+    process_video_context_data,
+    get_video_info_and_download_async
 
 )
 from app.core.config import SUBTITLES_DIR, TRANSCRIPTS_DIR, TMP_DIR, AUDIO_DIR
@@ -58,8 +59,8 @@ async def process_translation_task(task_id, paths, youtube_url, custom_prompt=""
 
         # 1.开始下载音频并获取视频上下文信息
         llm_context_task = asyncio.create_task(get_video_context_from_llm(content_name, channel_name))
-        #download_task = asyncio.create_task(get_video_info_and_download(youtube_url, paths["audio"]))
-        video_info = get_video_info_and_download(youtube_url, paths["audio"])
+        download_task = asyncio.create_task(get_video_info_and_download_async(youtube_url, paths["audio"]))
+        #video_info = get_video_info_and_download(youtube_url, paths["audio"])
 
 
         # 2.等待视频上下文信息生成
@@ -71,7 +72,9 @@ async def process_translation_task(task_id, paths, youtube_url, custom_prompt=""
 
         # 3. 等待下载完成
         tasks_store[task_id]["progress"] = 0.2
-        #video_info = await download_task
+        logger.info("await download_task 开始！")
+        video_info = await download_task
+        logger.info("await download_task 结束！")
         #video_title = video_info.get('title', task_id)
         video_id = video_info.get('id', task_id)
         video_channel = video_info.get('channel', task_id)
