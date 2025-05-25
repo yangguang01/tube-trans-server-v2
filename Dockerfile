@@ -29,4 +29,5 @@ ENV PORT=8080
 EXPOSE 8080
 
 # 启动应用
-CMD ["python3", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"] 
+#CMD ["python3", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"] 
+CMD ["python3", "-m", "app.main"]
